@@ -99,8 +99,8 @@ preparevars<-function(mout,climdata,lat,lon,mon=NA,timestep=NA) {
                     zen=sp$zen,azi=sp$azi)
   return(dfout)
 }
+
 #' Calculates physical and thermal parameters of tree trunk
-#'
 #' @param microclim - micropoint model outputs of beneath canopy conditions
 #' @param tradius - radius of trunk at height to be modelled in metres
 #' @param cs - array of specific heat capacities for each layer of wood in J/Kg/K
@@ -150,6 +150,17 @@ preparevars<-function(mout,climdata,lat,lon,mon=NA,timestep=NA) {
   return(list(ldist=ldist,sdist=sdist,heatcap=heatcap,nodes=p,ptemps=ptemps))
 }
 
+#' Initialise trunk parameters -
+#' @param microclim - micropoint model outputs of beneath canopy conditions
+#' @param tradius - radius of trunk at height to be modelled in metres
+#' @param thick - vector of length 8 of layer widths in metres
+#' @param cs - array of specific heat capacities for each layer of wood in J/Kg/K
+#' @param rho - array of wood density for each layer of wood in kg/metre^3
+#' @param depth - depth of interest for modelling (metres)
+#'
+#' @return list of trunk parameters for modelling temperature across 8 layers and 16 segments,
+#' ensuring depth of interest corresponds to a layer node
+#' @export
 .initializevars_v2 <- function(microclim, tradius, thick, cs, rho, depth) {
   # Calculate node distances between layers
   # ** Calcuate node position from outer to centre
@@ -179,9 +190,8 @@ preparevars<-function(mout,climdata,lat,lon,mon=NA,timestep=NA) {
 }
 
 
-# QUESTION - how do inputs related to splineing - CORRECTED seg number
-#' Title
-#'
+#' Run tree emulator
+#'  QUESTION - how do inputs related to splineing - CORRECTED seg number
 #' @param microclim - prepared microclimate/weather data output by `preparevars` function
 #' @param climdata - REMOVED!!! Use preparevars prior
 #' @param depth - from trunk surface of location to model (metres)
@@ -216,14 +226,13 @@ runtreeemulator <- function(treeclimdata, depth, aspect, treeparams) {
   return(tss)
 }
 
-#' Title Run treetrunk emulator with pre-defined layer widths
-#'
-#' @param microclim - prepared microclimate/weather data output by `preparevars` function
-#' @param climdata - REMOVED!!! Use preparevars prior
+#' Run treetrunk emulator with pre-defined layer widths
+#' is called after preparevars function
+#' @param treeclimdata - prepared microclimate/weather data output by `preparevars` function
 #' @param depth - from trunk surface of location to model (metres)
 #' @param aspect - of trunk location to model in degrees (north = 1, south = 180)
-#' @param widths - vector of 8 layer widths
-#' @param treeparams - named list of tradius=tree radius, cs=specific heat capacity of each layer, and rho = density of each layer
+#' @param treeparams - named list of tradius=tree radius in metres, cs=specific heat capacity of each layer,
+#'  rho = density of each layer, layer_widths = width in metres of each layer
 #' @param lat
 #' @param long
 #'
@@ -232,8 +241,6 @@ runtreeemulator <- function(treeclimdata, depth, aspect, treeparams) {
 #'
 #' @examples
 runtreeemulator_v2 <- function(treeclimdata, depth, aspect, treeparams) {
-  # Prepare input climate data
-  #treeclimdata <- .sortdata(microclim, climdata, lat, long) # USE sep call to preparevars to allow for splining etc
   # Prepare input tree data - internal function assumes 16 segs and 8 layers
   tvars <- .initializevars_v2(treeclimdata, treeparams$tradius, treeparams$layer_widths,treeparams$cs, treeparams$rho, depth)
   # find which layer and segment correspond to aspect and depth
@@ -298,8 +305,6 @@ runtreeemulator_v2 <- function(treeclimdata, depth, aspect, treeparams) {
   return(list(lats=lats,lons=lons))
 }
 
-
-
 era5_process <- function(filein, rte) {
    # get time - method varies as era5 file format changed
    nc_file <- ncdf4::nc_open(filein)
@@ -352,7 +357,6 @@ createtemplate<-function(metofficefilein, e) {
   rte<-aggregate(rte,25,fun="mean",na.rm=TRUE)
   return(rte)
 }
-
 createclimdf <- function(era5data, i, j) {
   dfout <- data.frame(obs_time=as.POSIXlt(time(era5data[[1]]), tz="UTC"),
         temp = .is(era5data[[1]])[i,j,],
@@ -383,7 +387,7 @@ getmetofficedata <- function(path, year, month, rte, what = "tasmin") {
 }
 
 
-#' Run treetrunk model at 25km resolution using era5 raster data previously reprojected to crs 27700
+#' Run treetrunk model across a 25km resolution grid using era5 raster data previously reprojected to crs 27700
 #'
 #' @param era5data - era5data output by `era5_process`
 #' @param reqhgt - height above ground to model (metres)
@@ -442,9 +446,30 @@ runmodelgrid <- function(era5data, reqhgt = 1, depth = 0.02, aspect = 180,
 
 ### Run micropoint model of beneath canopy conditions in timesteps to allow for LAI variation
 # Calls get_lai to model LAI through the year
-# Runs. model in timesteps of 5 days when LAI is varying
+#
 # Runs treetrunk model for two depths inner and outer
 
+#' Run treetrunk model across a 25km resolution grid allowing for seasonal variation in PAI as for deciduous trees
+#' Uses era5 raster data previously reprojected to crs 27700
+#' Runs model in timesteps of 5 days when LAI is varying
+#' @param era5data - era5data output by `era5_process`
+#' @param reqhgt - height above ground to model (metres)
+#' @param depth_outer - outer depth into trunk to model (metres from surface)
+#' @param depth_inner - inner depth into trunk to model (metres from surface) Set to NA if only one depth used.
+#' @param aspect - orientation of trunk location to monitor (degrees where 180 = south-facing aspect)
+#' @param forestparams - vegetation parameters used by micropoint. For deciduous trees, pai denotes the maximum PAI attained in season.
+#' @param groundparams - soil and ground parameters used by micropoint
+#' @param treeparams - list of trunk parameters tradius = radiuse(metres),cs = spec heat capacity for each layer (J/Kg/K),
+#' rho = denisty for each layer (kf/m^3), refl = trunk reflectance (0:1), trunk emmisivity = 0.97,
+#' k = heat conductivity for each layer, surfwetness (0:1)
+#' @param rte dtm of entire grid
+#' @param output_airtemp boolean if TRUE outputs air temperatures as well as trunk temperatures
+#'@param MinLAI = numeric value of minimum PAI values when calculating phenological variation.
+#'
+#' @return
+#' @export
+#'
+#' @examples
 runmodelgrid_pheno <- function(era5data, reqhgt = 1, depth_outer = 0.01, depth_inner=NA, aspect = 180,
                          forestparams, groundparams, treeparams, rte, output_airtemp=TRUE, MinLAI=0.5){
 
@@ -533,9 +558,8 @@ runmodelgrid_pheno <- function(era5data, reqhgt = 1, depth_outer = 0.01, depth_i
 }
 
 
-
-
-# Might need to add air temperature as well
+#' Blend ERA5 and HadUK weather data
+#' Calls C++ function blendtempCpp to convert fine spatial resolution but daily HAdUK data to hourly timeseries
 postprocess <- function(era5data, tasmin, tasmax, treetemps) {
   # resample era5 data
   tempc<-resample(era5data[[1]], tasmin[[1]])
@@ -552,7 +576,9 @@ postprocess <- function(era5data, tasmin, tasmax, treetemps) {
   return(treetempsf)
 }
 
-# Calculate hourly anomaly between era5 and haduk at 1km resolution
+#' Calculate hourly anomaly between era5 data and haduk min/max daily values at 1km resolution
+#' Typically used prior to calling `correct_temp` function.
+#' @export
 calc_temp_anomaly <- function(era5data, tasmin, tasmax) {
   # resample era5 data
   tempc<-resample(era5data[[1]], tasmin[[1]])
@@ -566,6 +592,8 @@ calc_temp_anomaly <- function(era5data, tasmin, tasmax) {
   return(out)
 }
 
+#' Corrects temperatures using anomaly output by `calc_temp_anomaly` function.
+#' @export
 correct_temp<-function(temps,dT){
   # resample tree trunk temperature
   temps1km <- resample(temps, dT)
@@ -575,8 +603,8 @@ correct_temp<-function(temps,dT){
   return(temps1km)
 }
 
-
-# Function to filter era5 inputs by months
+#' Function to filter era5 or similar inputs by months
+#' @export
 filter_era5<-function(era5data,smonth,emonth){
   tme<-time(era5data[[1]])
   sel<-which(month(tme)>=smonth & month(tme)<=emonth)

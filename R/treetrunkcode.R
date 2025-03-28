@@ -1,4 +1,4 @@
-#' Spline interpolates microclimate input and filters by month  - REMOVE - USE preparevars
+#' Spline interpolates microclimate input and filters by month  - REPLACED BY preparevars
 #'
 #' @param mout - micropoint model outputs of beneath canopy conditions
 #' @param climdata - climate data used as input to micropoint modelling
@@ -65,14 +65,13 @@ splinmicroclimatevars<-function(mout,climdata,mon,lat,lon,timestep) {
   return(dfout)
 }
 
-#' Calculates physical and thermal parameters of tree trunk
+#' Calculates physical and thermal parameters of each segment and layer of tree trunk
 #'
 #' @param microclim - micropoint model outputs of beneath canopy conditions
 #' @param ii
 #' @param treeradius - radius of trunk at height to be modelled in metres
 #' @param cwood - array of specific heat capacities for each layer of wood in J/Kg/K
 #' @param rhowood - array of wood density for each layer of wood in kg/metre^3
-#'
 #' @param nseg - integer number of model trunk segments
 #' @param nlyr - integer number of model trunk layers
 #'
@@ -80,7 +79,7 @@ splinmicroclimatevars<-function(mout,climdata,mon,lat,lon,timestep) {
 #' @export
 #'
 #' @examples
-initializevars <- function(microclim, ii, treeradius, cwood, rhowood, nseg, nlyr) {
+initializevars <- function(microclim, ii, treeradius, cwood, rhowood, nseg=16, nlyr=8) {
   # Calculate node distances between layers
   # ** Calculate node thickness
   thick <- sqrt(c(1:nlyr))
@@ -105,8 +104,8 @@ initializevars <- function(microclim, ii, treeradius, cwood, rhowood, nseg, nlyr
   return(list(ldist=ldist,sdist=sdist,heatcap=heatcap,ptemps=ptemps))
 }
 
-#' Prepares trunk model
-#'
+#' Prepares tree trunk model
+#' Calls burnincpp
 #' @param microclim - micropoint model outputs of beneath canopy conditions (may be spline interpolated using `splinmicroclimatevars`)
 #' @param reps
 #' @param treeradius - radius of trunk at height to be modelled in metres
@@ -134,7 +133,7 @@ burnin<-function(microclim, reps = 5, treeradius, refl = 0.23, em = 0.97, surfwe
   return(temps)
 }
 #' Runs tree trunk model and returns temperatures at time interval n for all trunk segments and layers
-#'
+#' Calls `initializevars`, `burnin` functions. and the C++ function `runmodelcpp`
 #' @param microclim - micropoint model outputs of beneath canopy conditions (may be spline interpolated using `splinmicroclimatevars`)
 #' @param n - time interval (seconds from start) for which outputs returned
 #' @param treeradius - radius of trunk at height to be modelled in metres
@@ -167,8 +166,8 @@ runmodel<-function(microclim, n, treeradius, refl = 0.23, em = 0.97, surfwet = 1
   return(temps)
 }
 
-#' Runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment
-#'
+#' Wrapper function that runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment
+#' Calls `initializevars`, `burnin` functions and the C++ function `runmodelthroughtime`.
 #' @param microclim - micropoint model outputs of beneath canopy conditions (may be spline interpolated using `splinmicroclimatevars`)
 #' @param seg - integer of trunk segment for which outputs required
 #' @param lyr - integer of trunk segment for which outputs required

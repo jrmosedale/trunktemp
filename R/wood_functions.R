@@ -47,7 +47,7 @@ trunk_parameters<-function(spp_params,sp,tradius, outerlayers=c(0.015,0.02,0.03,
     rho <- c(bkrho,swrho,swrho,rep(hwrho,(nlyr-3)))
     k <- c(bkK,swK,swK,rep(hwK,(nlyr-3)))
   }
-  if(sp=='oak'){
+  if(sp %in% c('oak','sycamore')){
     cs <- c(bkcph,swcph,rep(hwcph,(nlyr-2)))
     rho <- c(bkrho,swrho,rep(hwrho,(nlyr-2)))
     k <- c(bkK,swK,rep(hwK,(nlyr-2)))
