@@ -1,0 +1,304 @@
+---
+title: "Data Processing Part II"
+output: html_notebook
+---
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup, include=FALSE}
+library(devtools)
+load_all()
+
+#library(treetemp)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+
+dir_root<-"D:/MetOff_data/fieldwork"
+
+dir_tinytag<-file.path(dir_root,"Tiny Tag Data")
+dir_surveytag<-file.path(dir_root,"Survey Tag Data")
+
+dir_out<-"C:/Users/jm622/OneDrive - University of Exeter/MetOff_data/field_data/Logger_results"
+
+```
+
+## Distribution of temperatures
+
+!!!!  CORRECT  !!!!
+
+```{r distrib_plots, eval=FALSE}
+library(ggplot2)
+id<-"cw_nsp_3"
+
+# Combine N and S temp to singel database
+treedata<-allresults_df[which(allresults_df$id==id),]
+
+
+
+
+# Only keep observations where data for ALL temperatures (air and trunk)
+sel<-which( treedata$s_inner_temp==NA|treedata$s_outer_temp==NA||treedata$n_inner_temp==NA||treedata$n_outer_temp==NA||treedata$air_temp==NA)
+
+
+ggplot(plotdata.df, aes_(x=as.name(var),col=as.name('group'),fill=as.name('group'))) +
+  #geom_histogram(aes(y=..density..), position="identity", alpha=0.3, binwidth = 100) +
+  geom_density(alpha=alpha) +
+  labs(x=label,y='Density')+
+  scale_x_continuous(expand = c(0,0),limits=c(0, maxval))     + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_color_manual(values=cols)+
+  scale_fill_manual(values=cols)+
+  geom_vline(data=mu, aes(xintercept=x, color=Group.1),linetype="dashed")+
+  pubtheme() +
+  theme(legend.title=element_blank())
+}
+
+
+
+```
+## GDD comparisons
+Use treedata to calculate GDD using different methods
+Daily Tmx-Tmin / 2
+Half hourly T/48
+```{r gdd_calcs, eval=FALSE}
+
+calc_gdd<-function(t,tbase,tdiv){
+  dd<-t-tbase
+  dd<-ifelse(dd<0,0,dd)
+  dd<-dd/tdiv
+  gdd<-cumsum(dd)
+  return(gdd)
+}
+
+calc_daydd<-function(df){
+  df$doy<-as.numeric(strftime(df$datetime,format="%j"))
+  varnames<-names(df)
+  tempvars<-varnames[str_sub(varnames, start=-4)=='temp']
+  results_df<-data.frame()[1:length(unique(df$doy)),]
+  results_df$doy<-unique(df$doy)
+  for(v in tempvars){
+    tmax<-by(df[,v],df$doy,max,na.rm=T)
+    tmax<-array2DF(tmax,simplify=TRUE) 
+    tmin<-by(df[,v],df$doy,min,na.rm=T) 
+    tmin<-array2DF(tmin,simplify=TRUE) 
+    t<-(tmax$Value+tmin$Value)/2
+    results_df[,v]<-t
+  }
+  return(results_df)
+}
+
+#for(tree in unique(allresults_df$id)){
+tree<-"be_nsp_4"
+
+# Combine N and S temp to singel database
+sdata<-allresults_df[which(allresults_df$fullid==paste0(tree,"_s")),]
+ndata<-allresults_df[which(allresults_df$fullid==paste0(tree,"_n")),]
+treedata<-sdata[,c("id","datetime","air_temp","inner_temp", "outer_temp")]
+names(treedata)<-c("id","datetime","air_temp","s_inner_temp", "s_outer_temp")
+treedata<-cbind(treedata,ndata[,c("inner_temp","outer_temp")])
+names(treedata)<-c("id","datetime","air_temp","s_inner_temp", "s_outer_temp","n_inner_temp", "n_outer_temp")
+
+
+# Input data 
+startdt<-as.POSIXct(strptime("2024-04-01 00:00:00","%Y-%m-%d %H:%M:%S"), tz='GMT')
+enddt<-as.POSIXct(strptime("2024-06-12 00:00:00","%Y-%m-%d %H:%M:%S"), tz='GMT')
+indata<-treedata[which(treedata$datetime>=startdt & treedata$datetime<=enddt),]
+
+# Fill missing values in air_temp
+library(zoo)
+interp_airtemp<-indata[,c('datetime','air_temp')] %>% read.zoo %>% na.approx %>% fortify.zoo
+indata$air_temp<-interp_airtemp$.
+
+tbase<-10
+tdiv<-48
+gd30_df<-data.frame()[1:nrow(indata),]
+gd30_df$datetime<-indata$datetime
+gd30_df$air_gdd30_temp<-calc_gdd(indata$air_temp,tbase,tdiv) 
+gd30_df$n_inner_gdd30_temp<-calc_gdd(indata$n_inner_temp,tbase,tdiv) 
+gd30_df$n_outer_gdd30_temp<-calc_gdd(indata$n_outer_temp,tbase,tdiv) 
+gd30_df$s_inner_gdd30_temp<-calc_gdd(indata$s_inner_temp,tbase,tdiv) 
+gd30_df$s_outer_gdd30_temp<-calc_gdd(indata$s_outer_temp,tbase,tdiv) 
+
+plot_tseries(gd30_df,title=paste(tree,'- Cumulative DD (tbase=',tbase,'30min tstep)'),legloc="topleft")
+
+
+# Daily GDD min / max
+daily_df<-calc_daydd(indata)
+tdiv<-1
+gdd_df<-data.frame()[1:nrow(daily_df),]
+gdd_df$doy<-daily_df$doy
+gdd_df$datetime<-as.Date(gdd_df$doy,origin="2023-12-31")
+gdd_df$air_gdd_temp<-calc_gdd(daily_df$air_temp,tbase,tdiv) 
+gdd_df$n_inner_gdd_temp<-calc_gdd(daily_df$n_inner_temp,tbase,tdiv) 
+gdd_df$n_outer_gdd_temp<-calc_gdd(daily_df$n_outer_temp,tbase,tdiv) 
+gdd_df$s_inner_gdd_temp<-calc_gdd(daily_df$s_inner_temp,tbase,tdiv) 
+gdd_df$s_outer_gdd_temp<-calc_gdd(daily_df$s_outer_temp,tbase,tdiv) 
+head(gdd_df)
+
+
+plot_tseries(gdd_df,title=paste(tree,' - Cumulative GDD (tbase=',tbase,'daily tstep)'),legloc="topleft")
+
+
+startdt<-as.POSIXct(strptime("2024-05-09 00:00:00","%Y-%m-%d %H:%M:%S"), tz='GMT')
+enddt<-as.POSIXct(strptime("2024-05-20 00:00:00","%Y-%m-%d %H:%M:%S"), tz='GMT')
+
+startrw<-which(treedata$datetime==startdt)
+endrw<-which(treedata$datetime==enddt)
+if(length(startrw)>0 & length(endrw)>0 ) plot_tseries(treedata[startrw:endrw,c("datetime","n_inner_temp","n_outer_temp","air_temp","s_inner_temp","s_outer_temp")],title=tree,legloc='bottomright')
+
+plot_tseries(treedata[startrw:endrw,c("datetime","n_outer_temp","s_outer_temp","air_temp")],title=tree,legloc='bottomright')
+
+plot_tseries(treedata[startrw:endrw,c("datetime","s_inner_temp","s_outer_temp","air_temp")],title=tree,legloc='bottomright')
+
+
+```
+
+## Apply pest models to timeseries
+Compare Dendroctonus (prefers cooler temperatures to Ips
+
+```{r pest_dendroctonus, eval=FALSE}
+id<-"cw_nsp_3"
+treedata_df<-allresults_df[which(allresults_df$id==id),]
+# remove NAs
+treedata_df<-treedata_df[which(complete.cases(treedata_df)),]
+
+Tair<-treedata_df$air_temp
+tme<-treedata_df$datetime
+
+columns<-c("pest","site","tree","spp","location","aspect","depth","lay", "hatch", "pupate","adult")
+dendro_df<-data.frame(matrix(nrow = 0, ncol = length(columns))) 
+colnames(dendro_df) <- columns
+
+# Run for each locataion
+out<-"doy"
+dendro_df[nrow(dendro_df)+1,]<-c("Dmicans",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","outer",
+                        run_dendroctonus(treedata_df$s_outer_temp, Tair,tme,out) )
+
+dendro_df[nrow(dendro_df)+1,]<-c("Dmicans",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","inner",
+                        run_dendroctonus(treedata_df$s_inner_temp, Tair,tme,out) )
+
+dendro_df[nrow(dendro_df)+1,]<-c("Dmicans",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","outer",
+                        run_dendroctonus(treedata_df$n_outer_temp, Tair,tme,out) )
+
+dendro_df[nrow(dendro_df)+1,]<-c("Dmicans",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","inner",
+                        run_dendroctonus(treedata_df$n_inner_temp, Tair,tme,out) )
+
+dendro_df[nrow(dendro_df)+1,]<-c("Dmicans",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"air","air","air",
+                        run_dendroctonus(treedata_df$air_temp, Tair,tme,out) )
+dendro_df
+```
+
+```{r pest_ips, eval=FALSE}
+id<-"cw_nsp_3"
+treedata_df<-allresults_df[which(allresults_df$id==id),]
+# remove NAs
+treedata_df<-treedata_df[which(complete.cases(treedata_df)),]
+
+Tair<-treedata_df$air_temp
+tme<-treedata_df$datetime
+
+columns<-c("pest","site","tree","spp","location","aspect","depth","emerge", "lay","adult")
+ips_df<-data.frame(matrix(nrow = 0, ncol = length(columns))) 
+colnames(ips_df) <- columns
+
+# Run for each locataion
+out<-"doy" # out<-out
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","outer",
+                        run_ips(treedata_df$s_outer_temp, Tair,tme,out) )
+
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","inner",
+                        run_ips(treedata_df$s_inner_temp, Tair,tme,out) )
+
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","outer",
+                        run_ips(treedata_df$n_outer_temp, Tair,tme,out) )
+
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","inner",
+                        run_ips(treedata_df$n_inner_temp, Tair,tme,out) )
+
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"air","air","air",
+                        run_ips(treedata_df$air_temp, Tair,tme,out) )
+ips_df
+
+
+## 2nd generation 
+out<-"doy"
+
+# Run for each locataion
+start<-which(treedata_df$datetime==as.POSIXct((as.numeric(ips_df$adult[1])+1)*24*60*60,origin="2024-01-01",tz="GMT"))
+             
+Tair<-treedata_df$air_temp[start:nrow(treedata_df)]
+tme<-treedata_df$datetime[start:nrow(treedata_df)]
+T<-treedata_df$s_outer_temp[start:nrow(treedata_df)]
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","outer",
+                        run_ips(T, Tair,tme,out) )
+
+start<-which(treedata_df$datetime==as.POSIXct((as.numeric(ips_df$adult[2])+1)*24*60*60,origin="2024-01-01",tz="GMT"))
+Tair<-treedata_df$air_temp[start:nrow(treedata_df)]
+tme<-treedata_df$datetime[start:nrow(treedata_df)]
+T<-treedata_df$s_inner_temp[start:nrow(treedata_df)]
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","s","inner",
+                        run_ips(T, Tair,tme,out) )
+
+start<-which(treedata_df$datetime==as.POSIXct((as.numeric(ips_df$adult[3])+1)*24*60*60,origin="2024-01-01",tz="GMT"))
+Tair<-treedata_df$air_temp[start:nrow(treedata_df)]
+tme<-treedata_df$datetime[start:nrow(treedata_df)]
+T<-treedata_df$n_outer_temp[start:nrow(treedata_df)]
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","outer",
+                        run_ips(T, Tair,tme,out) )
+
+start<-which(treedata_df$datetime==as.POSIXct((as.numeric(ips_df$adult[4])+1)*24*60*60,origin="2024-01-01",tz="GMT"))
+Tair<-treedata_df$air_temp[start:nrow(treedata_df)]
+tme<-treedata_df$datetime[start:nrow(treedata_df)]
+T<-treedata_df$n_inner_temp[start:nrow(treedata_df)]
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"bark","n","inner",
+                        run_ips(T, Tair,tme,out) )
+
+start<-which(treedata_df$datetime==as.POSIXct((as.numeric(ips_df$adult[5])+1)*24*60*60,origin="2024-01-01",tz="GMT"))
+Tair<-treedata_df$air_temp[start:nrow(treedata_df)]
+tme<-treedata_df$datetime[start:nrow(treedata_df)]
+ips_df[nrow(ips_df)+1,]<-c("Ipstypog",treedata_df$site[1],
+                         treedata_df$tree[1],treedata_df$spp[1],"air","air","air",
+                        run_ips(Tair, Tair,tme,out) )
+ips_df
+
+ips_df$id<-paste(ips_df$location,ips_df$aspect,ips_df$depth, ips_df$generation, sep="_")
+grp1<-which(ips_d)
+t(ips_df[which(ips_df$id=="bark_s_outer_1"),c(8,11)])
+```
+
+
+## CUT OUTS
+```{r cut_outs, eval=FALSE}
+  # Remove duplicate datetimes
+  #  alldat<-alldat[-dp,]
+  if(length(dp)>0) {
+    warning(paste(length(dp),'duplicate readings found in file',f))
+    for(d in dp){ # for each duplicate
+      cpy<-which(alldat$datetime==alldat$datetime[d]) # get all copies
+      avgvals<-alldat$air_temp[c(min(cpy)-1,max(cpy+1))] # calculate avg temp before and after
+      keep<-which(alldat$air_temp[cpy]-avgvals==min(alldat$air_temp[cpy]-avgvals)) # keep value closest to above
+      remove_row<-cpy[-keep]
+      alldat<-alldat[-remove_row,]
+    }
+  }
+```

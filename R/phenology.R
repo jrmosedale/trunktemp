@@ -91,27 +91,6 @@ get_lai<-function(T,tme,lat, MaxLAI=3, MinLAI=0.5,sprg_sigmoid=FALSE,fall_sigmoi
 return(lai_hrly)
 }
 
-t0<-now()
-budburst<-gb*0
-LFstart<-gb*0
-LFend<-gb*0
-for (i in 1:dms[1]) {
-  for (j in 1:dms[2]) {
-    v<-.is(rte)[i,j]
-    if (is.na(v) == FALSE) {
-      # create climate data.frame for grid cell
-      weather <- createclimdf(era5data, i, j)
-      lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=ll$lats[i,j], MaxLAI=3,MinLAI=0.5)
-      budburst[i,j]<-yday(tme[which(lai>MinLAI)[1]])
-      pklai<-yday(tme[which(lai==MaxLAI)[1]])
-      LFstart[i,j]<-yday(tme[which(lai<MaxLAI & yday(tme)>pklai)[1]])
-      LFend[i,j]<-yday(tme[which(lai==MinLAI & yday(tme)>pklai)[1]])
-    }
-  }}
-print(now()-t0)
-plot(budburst,main='budburst')
-plot(LFstart,main='LFstart')
-plot(LFend,main='LFend')
 
 
 

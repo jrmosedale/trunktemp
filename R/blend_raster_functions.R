@@ -141,22 +141,67 @@ mosaicblend <- function(rlist) {
   a<-array(rep(m,n),dim=c(dim(r)[1:2],n))
   a
 }
+.is <- function(r) {
+  if (class(r)[1] == "PackedSpatRaster") r<-rast(r)
+  if (class(r)[1] != "matrix") {
+    if (dim(r)[3] > 1) {
+      y<-as.array(r)
+    } else y<-as.matrix(r,wide=TRUE)
+  } else y<-r
+  y
+}
 
-### Wrapper to blend all lad tile files in dir and add allsea tiles
-blend_all_tiles<-function(dir_in,dir_out,template_file,scenario_name="syc_s0",year_range="2011_2015"){
+#' Create SpatRaster object using a template
+#' @import terra
+.rast <- function(m,tem) {
+  r<-rast(m)
+  ext(r)<-ext(tem)
+  crs(r)<-crs(tem)
+  r
+}
+#year_range<-modelruns[6]
+
+merge_all_tiles<-function(dir_in,scenario_name,year_range,template_file){
   gb1km<-rast(template_file)
   gb<-trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))
   gb1km<-extend(gb1km,gb)
+  # Create overlapping tileset and record which are sea only which with land
+  tileset<-create_overlapping_tiles(gb1km,overlap=5000,sz=75000)
+  landtiles<-which(tileset$tile_land=="y")
 
-  scenario_params<-read.csv(scenario_file)
-  spp_params<-read.csv(spp_file)
-  sp<-substr(scenario_name,1,3)
+  tile_filelist<-file.path(dir_in,paste0("alh_",scenario_name,"_1kmrisks_t",landtiles,"_5yr_",year_range,".tif"))
+  if(!all(file.exists(tile_filelist))){
+    fnames<-substring(tile_filelist, first = (nchar(dir_in)+2))
+    missing_files<-fnames[which(!file.exists(tile_filelist))]
+    missing_tiles<-substring(unlist(lapply(strsplit(missing_files,'_'),'[',5)),2)
+    #print(missing_files)
+    print(paste(missing_tiles,collapse=','))
+    print(length(missing_tiles))
+    stop("Missing input tile files!!!")
+  }
+  rlist<-sprc(tile_filelist)
+  ukresults.r<-merge(rlist)
+  return(ukresults.r)
+}
+
+#tile_filelist<-file.path(dir_in,paste0("alh_",scenario_name,"_1kmrisks_t",landtiles,"_5yr_",year_range,".tif"))
+#if(!all(file.exists(tile_filelist))) stop(paste("Missing input tile files:",tile_filelist[which(!file.exists(tile_filelist))]))
+#rlist<-sprc(tile_filelist)
+#uknoblend.r<-merge(rlist)
+#plot(uknoblend.r)
+
+
+### Wrapper to blend all lad tile files in dir and add allsea tiles
+blend_all_tiles<-function(dir_in,template_file,scenario_name="syc_s0",year_range="2011_2015"){
+  gb1km<-rast(template_file)
+  gb<-trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))
+  gb1km<-extend(gb1km,gb)
 
   # Create overlapping tileset and record which are sea only which with land
   tileset<-create_overlapping_tiles(gb1km,overlap=5000,sz=75000)
   elist<-tileset$tile_extents
   etype<-tileset$tile_land
-  landtiles<-which(elist[[which(etype=="y")]])
+  landtiles<-which(etype=="y")
 
   tile_filelist<-file.path(dir_in,paste0("alh_",scenario_name,"_1kmrisks_t",landtiles,"_5yr_",year_range,".tif"))
   if(!all(file.exists(tile_filelist))) stop(paste("Missing input tile files:",tile_filelist[which(!file.exists(tile_filelist))]))
@@ -185,12 +230,12 @@ blend_all_tiles<-function(dir_in,dir_out,template_file,scenario_name="syc_s0",ye
   col_list<-list()
   for(c in 1:length(startseq)){
     s<-startseq[c]; e<-endseq[c]
-    blend.r<-mosaicblend(rlist=inrtemps_list[s:e])
+    blend.r<-mosaicblend(rlist=tile_rlist[s:e])
     col_list<-c(col_list,blend.r)
   }
   # blend columns
   ukresults.r<-mosaicblend(col_list)
   names(ukresults.r)<-lyrnames
-  writeRaster(ukresults.r,file.path(dir_out,paste0("alh_",scenario_name,"1kmrisks_5yr_",year_range,".tif")),overwrite=TRUE)
+
   return(ukresults.r)
 }

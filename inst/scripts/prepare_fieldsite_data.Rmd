@@ -1,0 +1,114 @@
+---
+title: "prepare_site_data"
+author: "JR Mosedale"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Directories
+#dir_od<-"C:/Users/jm622/OneDrive - University of Exeter"
+dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
+dir_era5<-file.path(dir_od,"Data","era5","2024")
+dir_haduk<-file.path(dir_od,"Data","HadUK","2024")
+dir_field<-file.path(dir_od,"MetOff_data","field_data")
+dir_dtm<-"/Users/jonathanmosedale/Data/mesoclim_inputs"
+dir_treehgt<-file.path(dir_field,"treeheight")
+
+dir_lai<-file.path(dir_od,"MetOff_data","field_data","LAI_results")
+dir_loggers<-file.path(dir_od,"MetOff_data/field_data/Logger_results")
+
+
+# Output directories
+dir_weather<-file.path(dir_od,"MetOff_data","field_data","weather")  
+dir_climate<-file.path(dir_od,"Data","climate_data")
+dir_microclim<-file.path(dir_od,"MetOff_data","microclimate")
+dir_ttrunk<-"dataout/treetrunk"
+
+dtm_file<-file.path(dir_dtm,"uk_dtm.tif")
+tree_file<-file.path(dir_field,"Field_data_locations.csv")
+site_file<-file.path(dir_field,"site_properties.csv") # general properties for modelling nsp at sites
+grid_file<-file.path(dir_od,'Data','OSgrids','os_bng_grids.gpkg')
+sppparam_file<-file.path(dir_field,"spp_parameters.csv")
+maxlai_file<-file.path(dir_field,'tree_model_maxlai.csv')
+  
+file.exists(dtm_file);file.exists(tree_file);file.exists(site_file); file.exists(grid_file);file.exists(sppparam_file);
+file.exists(maxlai_file)
+```
+
+## Combine info sources on trees and sites
+
+
+```{r trees}
+treeparams<-read.csv(tree_file)
+
+# Location file (by tree)
+tree_locs<-read.csv(tree_file)
+site_props<-read.csv(site_file,strip.white = TRUE )
+sites<-unique(site_props$site,)
+
+# Site & tree geo data
+trees_sf<-st_as_sf(tree_locs,coords = c("lon", "lat"), crs = 4326)
+trees_sf$id<-paste(tolower(trees_sf$Site),trees_sf$Tree_species,trees_sf$Tree,sep='_')
+sites_sf<-st_as_sf(site_props,coords = c("lon", "lat"), crs = 4326)
+
+# Get site terrain data and extract slope, elev and aspect
+sites_27700<-st_transform(sites_sf,27700)
+e<-ext(st_bbox(sites_27700)) # extent of area with sites
+dtm<-rast(dtm_file)
+
+ell<-ext(st_bbox(st_buffer(sites_sf,10000)))
+e27700<-ext(st_bbox(st_buffer(sites_27700,10000)))
+
+dtm<-crop(dtm,e27700); crs(dtm)<-crs('EPSG:27700')
+terrain_r<-terrain(dtm,v=c("slope","aspect"))
+elev<-terra::extract(dtm,sites_27700)
+slope<-terra::extract(terrain_r[["slope"]],sites_27700)
+aspect<-terra::extract(terrain_r[["aspect"]],sites_27700)
+
+sites_sf<-cbind(sites_sf,elev=elev$GBdem50,slope=slope$slope,aspect=aspect$aspect)
+
+# Get max lai data for each tree
+maxlai_df<-read.csv(maxlai_file)
+trees_sf<-merge(trees_sf,maxlai_df[,c('id','maxlai')],by='id', all.x=TRUE)
+
+# Get tree height data
+height_list<-list()
+for (site in c('AH','BE','CW','KG','WH')){
+  vhgt <- rast(file.path(dir_treehgt,paste0(tolower(site),'_canopy_height_2020.tif')))
+  names(vhgt)<-'Tree_height'
+  sitetrees<-trees_sf[which(trees_sf$Site==site),]
+  df<-extract(vhgt,st_transform(sitetrees,27700))
+  df$id<-sitetrees$id
+  height_list[[site]]<-df
+}
+heights_df<-do.call(rbind,height_list)
+trees_sf<-merge(trees_sf,heights_df[,c('id','Tree_height')],by='id', all.x=TRUE)
+
+# Correct AH circumference values (assume they are diameter)
+ah<-which(trees_sf$Site=='AH')
+trees_sf$Circumference[ah]<-2*pi*(trees_sf$Circumference[ah]/2)
+
+# Convert to circumf to  metres and calculate radius
+trees_sf$Circumference<-trees_sf$Circumference/100
+trees_sf$Radius<-round(trees_sf$Circumference/(2*pi),3)
+```
+
+### Map of sites
+Plot of field sites and where available individual tree locations.
+
+```{r map_sites}
+
+centre_pt<-as.numeric(st_coordinates(st_centroid(st_as_sfc(st_bbox(sites_sf)))))
+popup_text <- paste("<strong>Tree ID: </strong>",  trees_sf$Site, trees_sf$Tree_species, trees_sf$Tree, 
+                    "Max lai=",round(trees_sf$maxlai,1), "Height=",round(trees_sf$Tree_height,0))
+leaflet(options=list(minZoom=4)) %>%
+  setView(lng = centre_pt[1], lat = centre_pt[2], zoom = 7) %>%
+  #addProviderTiles(providers$OpenStreetMap.Mapnik,group="Streetmap") %>%
+  addProviderTiles(providers$Esri.WorldImagery,group="Satellite") %>%
+  addCircleMarkers(data=trees_sf, 
+             popup = popup_text, 
+             color = ~ ifelse(Tree_species == "oak", "red", "blue"))
+```

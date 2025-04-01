@@ -1,0 +1,1801 @@
+---
+title: "Modelling Monitoring Sites"
+output: html_notebook
+---
+# Analysis and comparison of observed with model data
+
+## Summary 
+Code involved in the implementation of 
+(i) micropoint modelling of beneatah canopy temperatures
+(ii) microtreetrunk modelling of trunk microclimate temperatures  and their use to drive example pest models.
+
+Takes as examples the four field sites for which tree trunk and beneath canopy temperatures were monitored during 2024.Models temperatures during the monitoring period.
+
+## Setup
+Function calls, libraries etc
+```{r setup, include=FALSE}
+prj <- system.file("proj", package = "terra")[1]
+Sys.setenv("PROJ_LIB" = prj)
+library(devtools)
+#  install_github("ilyamaclean/microtreetrunk")
+# unlink('mesoclim')
+# unlink('mesoclimAddTrees')
+# install_github("ilyamaclean/mesoclim")
+# install_github("jrmosedale/mesoclimAddTrees")
+# install_github("ilyamaclean/micropoint@main")
+# install_github("ilyamaclean/microtreetrunk@main")
+# library(mcera5)
+# library(microclimf)
+# library(NicheMapR)
+
+# Set up tree trunk modelling functions
+library(Rcpp)
+setwd("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver")
+sourceCpp("treetrunkcpp.cpp")
+
+# Other libraries
+library(dplyr)
+library(leaflet)
+library(sf)
+library(ncdf4)
+library(mesoclim)
+library(mesoclimAddTrees)
+library(micropoint)
+library(lubridate)
+library(terra)
+#library(microtreetrunk)
+library(ggplot2)
+library(drc)
+require(htmlwidgets)
+library(dygraphs)
+library(xts)
+library(ggpubr)
+# Microclimate custom functions - includes mcera5 and internal functions from other pkgs required - is this needed?
+#source("R/microclimate_model_functions.R")
+
+# Directories
+#dir_od<-"C:/Users/jm622/OneDrive - University of Exeter"
+dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
+dir_era5<-file.path(dir_od,"Data","era5","2024")
+dir_haduk<-file.path(dir_od,"Data","HadUK","2024")
+dir_field<-file.path(dir_od,"MetOff_data","field_data")
+dir_dtm<-"/Users/jonathanmosedale/Data/mesoclim_inputs"
+dir_treehgt<-file.path(dir_field,"treeheight")
+
+dir_lai<-file.path(dir_od,"MetOff_data","field_data","LAI_results")
+dir_loggers<-file.path(dir_od,"MetOff_data/field_data/Logger_results")
+
+
+# Output directories
+dir_weather<-file.path(dir_od,"MetOff_data","field_data","weather")  
+dir_climate<-file.path(dir_od,"Data","climate_data")
+dir_microclim<-file.path(dir_od,"MetOff_data","microclimate")
+dir_ttrunk<-"dataout/treetrunk"
+
+grid_file<-file.path(dir_od,'Data','OSgrids','os_bng_grids.gpkg')
+sppparam_file<-file.path(dir_field,"spp_parameters.csv")
+
+
+
+hgt_up_trunk<-1 # in metres
+
+source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/load_field_data.R")
+source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/wood_functions.R")
+source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/modelling_functions.R")
+source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/emulatorcode.R")
+
+# Get species defulat parameters
+spp_params<-read.csv(sppparam_file)
+rownames(spp_params)<-spp_params$name
+
+# Get tree field measurements
+treeparams<-read.csv(tree_file)
+
+# Fitted models file
+lai_type<-'lc'
+
+### Get internal datasets
+lai_models
+loggers_df<-system.file("loggers_df.rda", package = "trunktemp") 
+trees_sf
+sites_sf
+
+```
+
+### Micropoint function 
+```{r mpoint_function}
+runpointmodel_temp<-function (climdata, reqhgt, vegp, paii = NA, groundp, lat, long, 
+    zref = 2, uref = zref, soilm = NA, surfwet = NA, dTmx = 25, 
+    maxiter = 20, n = 20, runchecks = TRUE) 
+{
+    if (runchecks) {
+        rcd <- runchecksfun(climdata, vegp, groundp, lat, long)
+        climdata <- rcd$climdata
+        vegp <- rcd$vegp
+        groundp <- rcd$groundp
+    }
+    if (class(paii) == "logical") {
+        paii <- micropoint::PAIgeometry(vegp$pai, vegp$skew, vegp$spread, 
+            n)
+    }
+    tme <- as.POSIXlt(climdata$obs_time, tz = "UTC")
+    obstime <- data.frame(year = tme$year + 1900, month = tme$mon + 
+        1, day = tme$mday, hour = tme$hour + tme$min/60 + tme$sec/3600)
+    climdata$obs_time <- NULL
+    vegpp <- as.vector(unlist(vegp))
+    groundpp <- as.vector(unlist(groundp))
+    
+    yearG <- TRUE
+    nn <- dim(climdata)[1]
+    if (nn < 8760) yearG <- FALSE
+
+    
+    if (vegp$h > zref) {
+        climdata <- micropoint:::weatherhgtCpp(obstime, climdata, zref, uref, 
+            vegp$h, lat, long, yearG=yearG)
+        zref <- vegp$h
+    }
+    climdata$windspeed[climdata$windspeed < 0.5] <- 0.5
+    if (class(soilm) == "logical") {
+        soiltype <- micropoint:::.soilmatch(groundp)
+        spa <- micropoint::soilparams
+        ii <- which(spa$Soil.type == soiltype)
+        soilm <- micropoint:::soilmCpp(climdata, spa$rmu[ii], spa$mult[ii], 
+            spa$pwr[ii], spa$Smax[ii], spa$Smin[ii], spa$Ksat[ii], 
+            spa$a[ii])
+        soilm <- stats::spline(soilm, n = length(climdata$temp))$y
+    }
+    microp <- micropoint:::BigLeafCpp(obstime, climdata, vegpp, groundpp, 
+        soilm, lat, long, dTmx, zref, maxiter, 0.5, 0.5, 0.1, 
+        yearG)
+    bigleafvars <- data.frame(Tc = microp$Tc, Tg = microp$Tg, 
+        H = microp$H, psih = microp$psih, psim = microp$psim, 
+        phih = microp$phih, uf = microp$uf, sm = soilm, albedo = microp$albedo)
+    if (class(surfwet) == "logical") {
+        trc <- exp(-vegp$pai)
+        rmu <- ifelse(climdata$precip > 0, 1, 0.8)
+        swet <- (soilm - groundp$Smin)/(groundp$Smax - groundp$Smin)
+        bigleafvars$surfwet <- trc * swet + (1 - trc) * rmu
+    }
+    else bigleafvars$surfwet <- surfwet
+    vegpp[11] <- vegp$lref/2
+    vegpp[12] <- vegp$ltra/2
+    modp <- micropoint:::runmodel(reqhgt, zref, lat, long, obstime, climdata, 
+        bigleafvars, maxiter, vegpp, paii, groundpp)
+    obs_time <- tme
+    modp <- cbind(obs_time, modp)
+    return(modp)
+}
+```
+
+
+### Higher level R functions from ttrunkr.R
+```{r treetrunk_functions}
+# Load tree trunk params including layer widths to match tree radius
+trunk_parameters<-function(spp_params,sp,tradius, outerlayers=c(0.015,0.02,0.03,0.035)){
+  # Calculate thermal properties from moisture content etc
+  sw_mc<-spp_params['sw_mc',sp]
+  hw_mc<-spp_params['hw_mc',sp]
+  bk_mc<-spp_params['bk_mc',sp]
+  fsp<-spp_params['fsp',sp]
+  bk_fsp<-spp_params['bk_fsp',sp]
+  
+  # Calculate thermal conductivity
+  swK<-calc_thcond(Gb=spp_params['Gb',sp],x=sw_mc)
+  hwK<-calc_thcond(Gb=spp_params['Gb',sp],x=hw_mc)
+  bkK<-calc_thcond(Gb=spp_params['bk_Gb',sp],x=bk_mc)
+  
+  # Calculate spec heat capacity (sapwood outer and inner other layers) kJ/Kg/K
+  swcph<-calc_sph(sw_mc,cp0=NA,T=283,fsat=fsp)
+  hwcph<-calc_sph(hw_mc,cp0=NA,T=283,fsat=fsp)
+  bkcph<-calc_sph(bk_mc,cp0=NA,T=283,fsat=bk_fsp)
+  
+  # Calculate wood density (green)
+  swrho<-calc_density(Gb=spp_params['Gb',sp],x=sw_mc)
+  hwrho<-calc_density(Gb=spp_params['Gb',sp],x=hw_mc)
+  bkrho<-calc_density(Gb=spp_params['bk_Gb',sp],x=bk_mc)
+  
+  # Calculate layer parameters etc
+  nlyr<-8
+  nsegs<-16
+  
+  # Width of layers - probes shallow = 2 (2.5 cm) deep = layer 3 (5cm)
+  # Fixed outer layers then calculate others
+  #outerlayers<-c(0.015,0.02,0.03,0.035)
+  #outerlayers<-c(0.005,0.025,0.03,0.035)
+  thick<-sqrt(c(5:8))
+  thick <- (thick/ sum(thick)) * (tradius-sum(outerlayers))
+  layer_widths<-c(outerlayers,thick) # sum to tradius
+  if(round(sum(layer_widths),2)!=round(tradius,2)) stop("Layer widths do NOT sum to tree radius!!!")
+  
+  if(sp=='nsp'){
+    cs <- c(bkcph,swcph,swcph,rep(hwcph,(nlyr-3)))
+    rho <- c(bkrho,swrho,swrho,rep(hwrho,(nlyr-3)))
+    k <- c(bkK,swK,swK,rep(hwK,(nlyr-3)))
+  } 
+  if(sp=='oak'){
+    cs <- c(bkcph,swcph,rep(hwcph,(nlyr-2)))
+    rho <- c(bkrho,swrho,rep(hwrho,(nlyr-2)))
+    k <- c(bkK,swK,rep(hwK,(nlyr-2)))
+  } 
+
+  treeparams <- list(
+    tradius = tradius,
+    layer_widths=layer_widths,
+    cs = cs,
+    rho = rho,
+    refl = spp_params[["bk_swref",sp]],
+    em = spp_params[["bk_tem",sp]],
+    k = k,
+    surfwet = 1 )
+  
+  return(treeparams)
+}
+
+splinmicroclimatevars<-function(mout,climdata,mon,lat,lon,timestep) {
+  tme <- as.POSIXlt(climdata$obs_time,tz="UTC")
+  s<-which(tme$mon+1==mon)
+  s<-c(s[1]-1,s,s[length(s)]+1)
+  mout2 <- mout[s,]
+  climdata2 <- climdata[s,]
+  # spline microclimate variables
+  n<-(length(s)-1)*3600/timestep+1
+  tt <- as.numeric(as.POSIXlt(mout2$obs_time,tz="UTC"))
+  obs_time<-as.POSIXlt(spline(tt,n=n)$y,origin="1970-01-01 00:00", tz="UTC")
+  tair<-spline(mout2$tair,n=n)$y
+  relhum<-spline(mout2$relhum,n=n)$y 
+  windspeed<-spline(mout2$windspeed,n=n)$y
+  Rdirdown<-spline(mout2$Rdirdown,n=n)$y
+  Rdifdown<-spline(mout2$Rdifdown,n=n)$y
+  Rlwdown<-spline(mout2$Rlwdown,n=n)$y
+  Rswup<-spline(mout2$Rswup,n=n)$y
+  Rlwup<-spline(mout2$Rlwup,n=n)$y
+  # cap at zero
+  Rdirdown[Rdirdown<0]<-0
+  Rdifdown[Rdifdown<0]<-0
+  Rswup[Rswup<0]<-0
+  # spline pressure
+  pk<-spline(climdata2$pres,n=n)$y
+  # Convert dates
+  year<-obs_time$year+1900
+  month<-obs_time$mon+1
+  day<-obs_time$mday
+  hour<-obs_time$hour+obs_time$min/60+obs_time$sec/3600
+  # Calculate solar zenith
+  sp<-solpositionCppv(lat,lon,year,month,day,hour)
+  s2<-which(obs_time$mon+1==mon)
+  dfout<-data.frame(year=year[s2],
+                    month=month[s2],
+                    day=day[s2],
+                    hour=hour[s2],
+                    tair=tair[s2],
+                    relhum=relhum[s2],
+                    windspeed=windspeed[s2],
+                    Rdirdown=Rdirdown[s2],
+                    Rdifdown=Rdifdown[s2],
+                    Rlwdown=Rlwdown[s2],
+                    Rswup=Rswup[s2],
+                    Rlwup=Rlwup[s2],
+                    pk=pk[s2],
+                    zen=sp$zen[s2],
+                    azi=sp$azi[s2])
+  return(dfout)
+}
+
+initializevars <- function(microclim, ii, treeradius, cwood, rhowood, nseg, nlyr) {
+  # Calculate node distances between layers
+  # ** Calculate node thickness
+  thick <- sqrt(c(1:nlyr))  
+  thick <- (thick/ sum(thick)) * treeradius
+  # ** Calcuate node position from outer to centre
+  p <- 0.5*thick[1]
+  for (i in 2:(nlyr-1)) p[i]<-p[i-1]+0.5*thick[i]+0.5*thick[i+1]
+  p[nlyr]<-treeradius
+  # ** Calcuate distance between layer nodes
+  ldist <- p[2:nlyr]-p[1:(nlyr-1)]
+  # Calculate cicumference of each layer
+  radinner<-0.75-cumsum(thick)
+  radouter<-radinner+thick
+  circumference<-2*pi*(radinner+radouter)/2
+  # Calculate node distances between segments
+  sdist<-circumference/nseg
+  # Calculate volume of a seqment within each layer
+  volume <- sdist * thick
+  # Calculate heat capacity of a segment within each layer
+  heatcap <- volume*cwood*rhowood # (J/K)
+  ptemps<-matrix(microclim$tair[ii],nrow=nlyr,ncol=nseg)
+  return(list(ldist=ldist,sdist=sdist,heatcap=heatcap,ptemps=ptemps))
+}
+
+burnin<-function(microclim, reps = 5, treeradius, refl = 0.23, em = 0.97, surfwet = 1, 
+                 kwood, cwood, rhowood, nseg = 16, nlyr = 8, 
+                 timestep = 60)  {
+  # initialize model
+  initvars<-initializevars(microclim, 1, treeradius, cwood, rhowood, nseg, nlyr)
+  temps <- burnincpp(microclim,reps,refl,em,treeradius,surfwet,initvars$ptemps,kwood, 
+                     initvars$ldist,initvars$sdist,initvars$heatcap,timestep)
+  return(temps)   
+}
+
+runmodel<-function(microclim, n, treeradius, refl = 0.23, em = 0.97, surfwet = 1, 
+                 kwood, cwood, rhowood, nseg = 16, nlyr = 8, 
+                 timestep = 60)  {
+   # initialize model
+  initvars<-initializevars(microclim, 1, treeradius, cwood, rhowood, nseg, nlyr)
+  # burn in model
+  temps<-burnin(microclim,5,treeradius,refl,em,surfwet,kwood,cwood,rhowood,nseg,nlyr,timestep)
+  # run model
+  temps <- runmodelcpp(microclim,n,refl,em,treeradius,surfwet,temps,kwood, 
+                     initvars$ldist,initvars$sdist,initvars$heatcap,timestep)
+  return(temps)
+}
+
+runmodeltime <- function(microclim, seg, lyr, treeradius, refl = 0.23, em = 0.97, surfwet = 1, 
+                 kwood, cwood, rhowood, nseg = 16, nlyr = 8) {
+  timestep<-round((microclim$hour[2]-microclim$hour[1])*3600,0)
+  # initialize model
+  initvars<-initializevars(microclim, 1, treeradius, cwood, rhowood, nseg, nlyr)
+  # burn in model
+  temps<-burnin(microclim,5,treeradius,refl,em,surfwet,kwood,cwood,rhowood,nseg,nlyr,timestep)
+  # run model
+  tss <- runmodelthroughtime(microclim,seg,lyr,refl,em,treeradius,surfwet,temps,kwood,initvars$ldist,
+    initvars$sdist, initvars$heatcap, timestep)
+  return(tss)
+}
+
+# Get POSIXct timeseries from numeric year,month,day and decimal hour
+get_datetime<-function(year,month,day,hour) as.POSIXct(paste(year,sprintf("%02d",month),sprintf("%02d",day),sep='-'))+(3600*hour)
+
+
+```
+
+
+
+
+
+### Map of sites and trees
+Plot of field sites and where available individual tree locations.
+
+```{r map_sites}
+
+centre_pt<-as.numeric(st_coordinates(st_centroid(st_as_sfc(st_bbox(sites_sf)))))
+popup_text <- paste("<strong>Tree ID: </strong>",  trees_sf$Site, trees_sf$Tree_species, trees_sf$Tree, 
+                    "Max lai=",round(trees_sf$maxlai,1), "Height=",round(trees_sf$Tree_height,0))
+leaflet(options=list(minZoom=4)) %>%
+  setView(lng = centre_pt[1], lat = centre_pt[2], zoom = 7) %>%
+  #addProviderTiles(providers$OpenStreetMap.Mapnik,group="Streetmap") %>%
+  addProviderTiles(providers$Esri.WorldImagery,group="Satellite") %>%
+  addCircleMarkers(data=trees_sf, 
+             popup = popup_text, 
+             color = ~ ifelse(Tree_species == "oak", "red", "blue"))
+```
+
+## Logger data - all trees
+Load logger data already merged with weather temperature at 30min frequency.
+Missing air_temp values can be calculated from weather data applying a correction based on the mean relationshiop between weather and measured air temperatures (for each hour to capture some diurnal variation in relationship).
+HOWEVER this does not capture seasonal variation partic for deciduous canopies
+
+
+```{r logger_data, include=FALSE}
+loggers_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
+
+# Ensure weather temperatures correct
+trees_df<-st_drop_geometry(trees_sf[,c('id','subsite')])
+loggers_df<-left_join(loggers_df,trees_df,by="id")
+loggers_df$weather_temp<-NA
+for(id in unique(loggers_df$id)){
+  sel<-which(loggers_df$id==id)
+  subsite<-loggers_df$subsite[sel][1]
+  weather<-read.csv(file.path(dir_weather,paste0('weather_',subsite,'_2024.csv')))
+  wtemp<-match_temperatures(temp_in=weather$temp,dt_in=weather$obs_time,dt_out=loggers_df$datetime[sel],tme_thold=60*60)
+  length(wtemp)==length(sel)
+  loggers_df$weather_temp[sel]<-wtemp
+}
+
+#loggers_df<-loggers_df[which(!is.na(loggers_df$weather_temp)),]
+startdate<-as.POSIXct("2024-02-12 00:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_df$datetime))
+enddate<-  as.POSIXct("2024-10-10 23:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_df$datetime))
+loggers_df<-loggers_df[which(loggers_df$datetime>=startdate & loggers_df$datetime<=enddate),]
+```
+
+### Example of Wakehurst missing data
+```{r missing_logger_data}
+site<-'WH'
+trees<-trees_sf[which(trees_sf$Site==site),]
+figdata<-list()
+for(t in 1:nrow(trees)){
+  id<-trees$id[t]
+  plotdata<-loggers_df[which(loggers_df$id==id),]
+  figdata[[id]]<-data.frame(
+    "id"=id,
+    "datetime"=plotdata$datetime,
+    "weather_temp"=plotdata$weather_temp,
+    "air_temp"=plotdata$air_temp)
+}
+figs<-lapply(figdata,makeawfig)
+#htmltools::tagList(figs)
+lapply(figs,print)
+```
+
+
+### LAI data - all trees except KG
+Predicted LAI development from fitting models to observed LAI derived from canopy photos.
+
+```{r lai_data}
+# Tree data
+clumping_df<-readRDS(file.path(dir_lai,paste('clumping_allsites.Rds',sep='_')))
+langles_df<-readRDS(file.path(dir_lai,paste('leafangles_allsites.Rds',sep='_')))
+
+# Plot example LAI curves for AH
+par(mfrow=c(2,2))
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE), widths = lcm(5), heights =lcm(5))
+for(site in c('AH','BE','CW','WH')){
+  trees<-trees_sf[which(trees_sf$Site==site),]
+  for(t in 1:nrow(trees)){
+    laimod<-lai_models[[trees$id[t]]]
+    #tme<-unique(obs_df$datetime)
+    tme<-unique(loggers_df$datetime)
+    doy_seq<-unique(as.numeric(strftime(as.POSIXct(tme), format = "%j")))
+    lai_seq<-predict(laimod, data.frame(date=doy_seq))
+    plotdata<-data.frame("doy"=doy_seq,"lai"=lai_seq)
+    if (trees$Tree_species[t]=='nsp') col<-'green'
+    if (trees$Tree_species[t]=='oak') col<-'purple'
+    if(t==1) print(plot(plotdata$doy, plotdata$lai,col=col,type='l',ylab="Model LAI", ylim=c(0,5),xlab = "Day of Year")) else lines(plotdata$doy, plotdata$lai,col=col) 
+  }
+}
+```
+
+### Describe relationship air to weather temperature
+Generally beneath mean canopy air temperatures lower than weather temperatures (mean dif ~ 1deg) by up to 5+ degrees (sunny day temperatures?).
+However for CW and BE sites less difference between the two with BE NSP and CW Oak mean beneath canopy air> mean weather temp). 
+T difference could be used to remove outliers likely caused by logger error.
+```{r hist_air_wthr_difs}
+# Noxplot / histogram of difference freq by site/spp (season?) - 5x2 GRID plot
+par(mfrow=c(5,2))
+par(mar=c(1,1,1,1))
+# Calculate limits
+for (ste in unique(loggers_df$site)){
+  for (spp in unique(loggers_df$spp)){
+    sel<-which(loggers_df$site==ste & loggers_df$spp==spp)
+    plotdata<-loggers_df[sel,]
+    plotdata$tdif<-plotdata$air_temp-plotdata$weather_temp
+    print(hist(plotdata$tdif,main=paste(ste,spp,'air-weather T'),xlim=c(-10,10), breaks=seq(-15,15,1),cex=0.5))
+  } }
+
+for (ste in unique(loggers_df$site)){
+  for (spp in unique(loggers_df$spp)){
+    sel<-which(loggers_df$site==ste & loggers_df$spp==spp)
+    plotdata<-loggers_df[sel,]
+    print(paste(ste,spp,"mean weather T=",mean(plotdata$weather_temp),
+                "Mean air T=",mean(plotdata$air_temp,na.rm=T) ))
+} }
+```
+
+#### Exploring difference between beneath canopy and weather temperature
+Absolute difference between weather and beneath canopy temperatures shows only a weak correlation with LAI. When analysed by hour of day or solar zenith grouping stronger relationships revealed. Increasing LAI - increased difference at lower zenith  and declining difference during night hours.
+
+```{r describe_air_weather, eval=TRUE, include=FALSE}
+# All trees calculate difference - exclude KG as no LAI data
+tdif_df<-loggers_df[which(loggers_df$site!='kg'),]
+#tdif_df$tdiff<-tdif_df$weather_temp-tdif_df$air_temp
+tdif_df$tdiff<-tdif_df$air_temp-tdif_df$weather_temp
+tdif_df$lai<-NA              
+for (id in unique(tdif_df$id)){
+    sel<-which(tdif_df$id==id)
+    laimod<-lai_models[[id]]
+    tme<-tdif_df$datetime[sel]
+    doy_seq<-as.numeric(strftime(as.POSIXct(tdif_df$datetime[sel]), format = "%j"))
+    lai_seq<-predict(laimod, data.frame(date=doy_seq))
+    lai_seq<-ifelse(lai_seq<0.1,0.1,lai_seq)
+    tdif_df$lai[sel]<-lai_seq
+}
+
+par(mfrow=c(1,1))
+
+# Plot for all trees/hours
+plot(tdif_df$lai,(tdif_df$tdiff),xlim=c(0,4),ylim=c(0,10),ylab='Air - Weather temperature',xlab='Modelled LAI',main='Air-Weather Difference vs LAI',cex=0.05)
+
+# Plot by hour
+for(hr in c(0:23)){
+  plotdata<-tdif_df[which(hour(tdif_df$datetime)==hr),]
+  plot(plotdata$lai,plotdata$tdiff,xlim=c(0,4),ylim=c(0,10),ylab='Temp difference by hr',xlab='Modelled LAI',main=hr,,cex=0.2)
+    abline(lm(plotdata$tdiff ~ plotdata$lai))
+
+}
+```
+
+Using solar zenith angle captures some of the diurnal and seasonal variation pre/post sunrise/set should be treated as separate cases.
+```{r t_dif_solar}
+# add tree lat lon
+tdif_df$site<-substr(tdif_df$id,1,2)
+tdif_df$lat<-NA
+tdif_df$lon<-NA
+for(site in c('ah','be','cw','wh')){
+  lat<-st_coordinates(sites_sf[which(tolower(sites_sf$site)==site),])[2]
+  lon<-st_coordinates(sites_sf[which(tolower(sites_sf$site)==site),])[1]
+  tdif_df$lat[which(tdif_df$site==site)]<-lat
+  tdif_df$lon[which(tdif_df$site==site)]<-lon
+}
+
+solarpos<-micropoint::solarposition(tdif_df$lat,tdif_df$lon,as.POSIXlt(tdif_df$datetime),NA,NA,NA,merid=0,dst=0)
+tdif_df$szenith<-solarpos$zen
+
+plot(tdif_df$szenith,tdif_df$tdiff,xlim=c(25,145),ylim=c(0,10),ylab='Temperature difference',xlab='Solar zenith',main='Temp diff vs Solar zenith',cex=0.05,col=as.factor(plotdata$site))
+
+# By solar angle group
+minsa<-min(tdif_df$szenith)
+tdif_df$szgrp<-as.numeric(cut_number(tdif_df$szenith,12))
+
+# Plot by hour
+tmodel_list<-list()
+for(hr in c(min(tdif_df$szgrp):max(tdif_df$szgrp))){
+  plotdata<-tdif_df[which(tdif_df$szgrp==hr),]
+  tmodel_list[[hr]]<-lm(tdiff ~ lai,data=plotdata)
+  rng<-levels(cut_number(tdif_df$szenith,12))[hr]
+  rng<-as.numeric(unlist(strsplit(gsub("\\[|\\(|\\]|\\)","",rng),",")))
+  tmodel_list[[hr]]$szen_min<-rng[1]
+  tmodel_list[[hr]]$szen_max<-rng[2]
+  print(plot(plotdata$lai,plotdata$tdiff,xlim=c(0,4),ylab='Temperature difference',xlab='Modelled LAI',main=hr,col=as.factor(plotdata$site),cex=0.1))
+  
+  print(abline(tmodel_list[[hr]]))
+}
+# Could now calculate air_temp fill values on basis of solar zenith and lai
+
+```
+
+### Fill in air_temperature readings where missing based on hourly relationship to weather temperature
+Still ignoring KG sites as missing LAI
+```{r fill_airtemp, include=FALSE,eval=FALSE}
+obs_list<-list()
+for(t in 1:nrow(trees_sf)){
+  id<-trees_sf$id[t]
+  obs_list[[t]]<-fill_airtemp(loggers_df,id)
+}
+obs_df<-do.call("rbind", obs_list)
+
+obs_list<-list()
+for(t in 1:length(unique(tdif_df$id))){
+  id<-unique(tdif_df$id)[t]
+  obs_list[[t]]<-fill_airtemp_solar(tdif_df[which(tdif_df$id==id),],tmodel_list)
+}
+obs_df<-do.call("rbind", obs_list)
+```
+
+Use solar altitude and LAI to predict air temperatures from weather temperature where no observations.
+```{r fill_airtemp_solarhr, eval=FALSE}
+#obs_df<-fill_airtemp_solar(tdif_df,tmodel_list)
+```
+
+Example plot of filled air temperature data
+```{r plot_obs_airtemp}
+id<-'ah_oak_1'
+
+plotdata<-obs_df[which(obs_df$id==id),c("id","spp","site","datetime","weather_temp","air_temp","airt_modeled")]
+plotdata$mod_air_temp<-ifelse(plotdata$airt_modeled,plotdata$air_temp,NA)
+plotdata$obs_air_temp<-ifelse(plotdata$airt_modeled,NA,plotdata$air_temp)
+
+figdata<-data.frame(
+    "id"=id,
+    "datetime"=plotdata$datetime,
+    "weather_temp"=plotdata$weather_temp,
+    "observed_air"=plotdata$obs_air_temp,
+    "modelled_air"=plotdata$mod_air_temp)
+
+tseries<- xts(x = figdata, order.by = plotdata$datetime)
+dygraph(tseries, main="Reconstructed air temperature series",group='group1') %>% dyAxis("y", label = "Temp (C)") %>%
+    dyRangeSelector(height=20) %>%
+    dySeries("weather_temp",color = 'black') %>%
+    dySeries("observed_air",color = 'green') %>%
+     dySeries("modelled_air",color = 'blue') %>%
+   dyLegend(width=600)
+
+#print(fig)
+```
+
+
+
+
+# Microclimate modelling and Prepare data for treetrunk model
+Derives beneath canopy conditions from weather, ground vegetation and soil data.
+
+LAI - from fitted model to observed tree data
+Clumping - set to 0
+Leaf angle - average species values derived from Thimonier LAI calculation Oak = 20, NSP = 43
+Tree height - correction factor applied of *0.25 to better match observed temperatures
+Modelling in (5) day steps to incorporate LAI evolution as predicted from fitted models.
+
+Excludes KG trees as no LAI data - TO DO add proxy values
+
+```{r microclimate_model, warnings=FALSE, }
+# Get parameters - dates should ~match field observation time period if LAI models to be used
+yr<-2024
+startdate<-as.POSIXlt("2024/02/12 00:00",tz='GMT')
+enddate<-as.POSIXlt("2024/10/10 23:00",tz='GMT')
+height_correction<-0.25
+
+# For every subsite...
+subsites<-unique(trees_sf$subsite)
+# Drop KG because no LAI - NEED to ADD - average of spp
+subsites<-subsites[which(subsites!="KG")]
+
+# ste<-sites_sf[1,]
+for(s in subsites){
+  # Get site parameters
+  ste<-sites_sf[which(sites_sf$subsite==s),]
+  site<-ste$site
+  soil<-ste$soil
+  elev<-ste$elev
+  slope<-ste$slope
+  aspect<-ste$aspect
+  lat<-st_coordinates(ste)[2]
+  lon<-st_coordinates(ste)[1]
+  
+  # load weather - REPLACE THIS BY RERUNNING CORRECTED weather  creation CODE in prepare_2024_weather.R
+  weather<-read.csv(file.path(dir_weather,paste0('weather_',s,'_',yr,'.csv')))
+  weather<-weather[which(weather$obs_time>=startdate & weather$obs_time<=enddate),]
+  #weather$obs_time<-as.character(weather$obs_time)
+
+  # Determine sequence of start and end dates for running models with updated LAI
+  timestep<-24*5
+  numsteps<-nrow(weather)/timestep
+  startseq<-seq(1,ceiling(numsteps)*timestep,timestep)
+  endseq<-pmin(nrow(weather),startseq+timestep-1)
+
+  # Site properties
+  sitep<-micropoint::creategroundp(soil)
+  sitep$Psie<- -5.6 # what value?
+  sitep$slope<-slope
+  sitep$aspect<-aspect
+
+  trees<-trees_sf[which(trees_sf$subsite==s),]
+  
+  # for every tree at site...
+  # tree<-trees[1,]
+  for(t in 1:nrow(trees)){
+    tree<-trees[t,]
+    id<-tree$id
+    
+    # Get tree LAI model
+    laimod<-lai_models[[id]]
+    
+    ### Species / Tree canopy values
+    spp<-tree$Tree_species
+    vegp<-micropoint::forestparams
+    for(nm in names(vegp)) vegp[[nm]]<-spp_params[nm,spp]
+    
+    # Correction applied to observed height
+    vegp$h<-tree$Tree_height * height_correction
+
+    # Calculate LAI value for each timestep
+    doy_seq<-as.numeric(strftime(as.POSIXct(weather$obs_time[(startseq+endseq)/2]), format = "%j"))
+    lai_seq<-predict(laimod, data.frame(date=doy_seq))
+    lai_limit<-0.5
+    lai_seq<-ifelse(lai_seq<lai_limit,lai_limit,lai_seq)
+
+    ### Run micropoint model of beneath canopy conditions in timestpes
+    canopymc_list<-list()
+    for (i in 1:length(startseq)){
+      start<-startseq[i]
+      end<-endseq[i]
+      steppai<-max(lai_seq[i],0.1)
+      vegp$pai<- steppai
+      canopymc<-suppressWarnings(runpointmodel_temp(weather[start:end,],
+                                                    reqhgt=hgt_up_trunk, 
+                                                    vegp=vegp, paii=NA, groundp=sitep,
+                                                    lat=lat,long=lon,zref=2, uref=2, 
+                                                    surfwet=0.1,runchecks =TRUE))
+      canopymc_list[[i]]<-canopymc
+    }
+    canopymc<-do.call(rbind, canopymc_list)
+    
+    # Check for any NA values and plot timeseries
+    nasteps<-which(unlist(lapply(canopymc_list,anyNA)))
+    #ggplot(data=canopymc, aes(x=obs_time, y=tair)) +geom_line()
+    
+    ### Create microclimate output for tree trunk modelling 
+    ### include driving weather temperature, latlon,veg & site parameters
+    microclim<-list(microclim=canopymc,weather=weather,lat=lat,lon=lon,vegp=vegp,sitep=sitep)
+    filename<-file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds'))
+    print(filename)
+    saveRDS(microclim,filename)
+  } #tree
+} # site
+```
+
+
+
+
+```{r plot_microclim_airtemp, eval=FALSE,include=FALSE}
+### Plot weather, modelled and observed air temps - compare different micropoint methods
+id<-'ah_nsp_1'
+plot_dfig<-FALSE
+par(mfrow=c(1,2))
+
+microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+
+plotdata<-data.frame(
+  "id"=id,"datetime"=as.POSIXct(microclim$weather$obs_time,"%Y-%m-%d %H:%M:%OS", tz='UTC')[which(microclim$weather$obs_time %in% loggers_df$datetime)],
+  "weather_temp"=microclim$weather$temp[which(microclim$weather$obs_time %in% loggers_df$datetime)],
+  "obs_air_temp"=loggers_df$air_temp[which(loggers_df$id==id & loggers_df$datetime %in% microclim$weather$obs_time)],
+  "model_air_temp"=microclim$microclim$tair[which(microclim$weather$obs_time %in% loggers_df$datetime)]
+)
+
+tseries<- xts(x = plotdata, order.by = plotdata$datetime)
+dygraph(tseries, main=plotdata$id[1],group='group1') %>% dyAxis("y", label = "Temp (C)") %>%
+dyRangeSelector(height=20) %>%
+dySeries("weather_temp",color = 'black') %>%
+dySeries("obs_air_temp",color = 'green') %>%
+dySeries("model_air_temp",color = 'blue') %>%
+dyLegend(width=600)
+
+# Plot air_t modelled vs obs airT
+plotdata<-plotdata[which(!is.na(plotdata$obs_air_temp)),]
+tmss<-1-sum(abs(plotdata$model_air_temp-plotdata$obs_air_temp)^2)/sum(abs(plotdata$obs_air_temp-mean(plotdata$obs_air_temp))^2)
+
+# Pot modelled and observed temperatures with weather and observed temperatures
+plot(plotdata$model_air_temp~plotdata$obs_air_temp,cex=0.05,main=paste(id,round(tmss,3)),xlab='Observed air temperature',ylab='Modelled air temperature')
+abline(a=0, b=1,col='red',lwd=1)
+
+```
+
+
+## Comparison modelled temperature with observed - Rindex
+Compare distributions of observed beneath canopy air temperatures with:
+(i) modelled beneath canopy air temperatures
+(ii) weather data temperatures
+
+Important to realise that mmodelled temperatures use parameters derived from observations eg LAI/PAI
+
+### Individual trees comparison - scatter plots
+
+```{r,compare_model_obs_canopy_temps}
+# Need to compare only for periods of time when observed data available
+ids<-c()
+tmodss<-c()
+twtrss<-c()
+for(s in c("A1", "A2", "B1", "B2", "C1", "C2", "W1" ,"W2")){
+  trees<-trees_sf[which(trees_sf$subsite==s),]
+  for(t in 1:nrow(trees)){
+    id<-trees$id[t]
+    microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+    weather<-microclim$weather
+    weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[nrow(microclim$microclim)]),]    
+    
+    obsdata<-loggers_df[which(loggers_df$id==id & !is.na(loggers_df$air_temp)),]
+    obsdata<-obsdata[which(obsdata$datetime %in% microclim$microclim$obs_time),]
+    
+    sel<-which(microclim$microclim$obs_time %in% obsdata$datetime)
+    tobs<-obsdata$air_temp
+    tmod<-microclim$microclim$tair[sel]
+    twtr<-weather$temp[sel]
+    length(tmod)==length(tobs)
+    
+    # Calculate ssqrs
+    tmss<-round(1-sum(abs(tmod-tobs)^2)/sum(abs(tobs-mean(tobs))^2),3)
+    twss<-round(1-sum(abs(twtr-tobs)^2)/sum(abs(tobs-mean(tobs))^2),3)
+    tmodss<-append(tmodss,tmss)
+    twtrss<-append(twtrss,twss)
+    ids<-append(ids,id)
+
+    # Pot modelled and observed temperatures with weather and observed temperatures
+    par(mfrow=c(1,2))
+    plot(tmod~tobs,cex=0.1,main=paste(id,'Tmodel R=',tmss))
+    abline(a=0, b=1,col='red')
+    plot(twtr~tobs,cex=0.1,main=paste(id,'Tweather R=',twss))
+    abline(a=0, b=1,col='red')
+  }
+}
+treerss<-data.frame('id'=ids,'Rtwtr'=twtrss,'Rtmod'=tmodss)  
+  
+# Compare distributions - needs better colour scheme
+#srce<-c(rep('model',length(tmod)),rep('obs',length(tobs)),rep('wtr',length(twtr)))
+#plotdata<-data.frame("air_temp"=c(tmod,tobs,twtr),"srce"=srce)
+#ggplot(plotdata, aes(x=air_temp, fill=srce)) + 
+#  geom_histogram(alpha=0.2, position="identity")
+```
+
+### By species & site
+Weather 0.72 to 0.9
+Model 0.68 to 0.79
+```{r wtr_model_air_temp_sitespp}
+ids<-c()
+tmodss<-c()
+twtrss<-c()
+layout(matrix(c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16), 4, 4, byrow = TRUE) )#,widths=c(1,1,1,1), heights=c(1,1,1,1))
+par(mar = c(2, 0.5, 1, 0.5)) # c(bottom, left, top, right)
+for(site in c('AH','BE','CW','WH')){
+  for(spp in c('oak','nsp')){
+    trees<-trees_sf[which(trees_sf$Site==site & trees_sf$Tree_species==spp),]
+    tobs<-c(); tmod<-c(); twtr<-c()
+    for(t in 1:nrow(trees)){
+      id<-trees$id[t]
+      microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+      weather<-weather<-microclim$weather
+      weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[nrow(microclim$microclim)]),]    
+
+      obsdata<-loggers_df[which(loggers_df$id==id & !is.na(loggers_df$air_temp)),]
+      obsdata<-obsdata[which(obsdata$datetime %in% microclim$microclim$obs_time),]
+    
+      sel<-which(microclim$microclim$obs_time %in% obsdata$datetime)
+      tobs<-append(tobs,obsdata$air_temp)
+      tmod<-append(tmod,microclim$microclim$tair[sel])
+      twtr<-append(twtr,weather$temp[sel])
+    }
+
+    # Calculate RSS 
+    tmss<-1-sum(abs(tmod-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+    twss<-1-sum(abs(twtr-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+    tmodss<-append(tmodss,tmss)
+    twtrss<-append(twtrss,twss)
+    ids<-append(ids,paste0(site,'_',spp))
+
+    # Pot modelled and observed temperatures with weather and observed temperatures
+    plot(tmod~tobs,cex=0.1,main=paste('Tmodel ',round(tmss,2)))
+    abline(a=0, b=1,col='red',lwd=1.5)
+    plot(twtr~tobs,cex=0.1,main=paste('Tweather ',round(twss,2)))
+    abline(a=0, b=1,col='red',lwd=1.5)
+    
+  }
+}
+
+stespprss<-data.frame('id'=ids,'Rtwtr'=twtrss,'Rtmod'=tmodss)  
+stespprss
+```
+### All trees
+
+```{r wtr_model_air_temp_all}
+tobs<-c(); tmod<-c(); twtr<-c()
+trees<-trees_sf[which(trees_sf$Site!='KG'),]
+for(t in 1:nrow(trees)){
+  id<-trees$id[t]
+  s<-trees$subsite[t]
+  microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+  weather<-microclim$weather
+  weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[nrow(microclim$microclim)]),]    
+  obsdata<-loggers_df[which(loggers_df$id==id & !is.na(loggers_df$air_temp)),]
+  obsdata<-obsdata[which(obsdata$datetime %in% microclim$microclim$obs_time),]
+    
+  sel<-which(microclim$microclim$obs_time %in% obsdata$datetime)
+  tobs<-append(tobs,obsdata$air_temp)
+  tmod<-append(tmod,microclim$microclim$tair[sel])
+  twtr<-append(twtr,weather$temp[sel])
+}
+
+# Calculate RSS 
+tmss<-1-sum(abs(tmod-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+twss<-1-sum(abs(twtr-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+
+# Pot modelled and observed temperatures with weather and observed temperatures
+par(mfrow=c(1,2))
+plot(tmod~tobs,cex=0.05,main=paste('Model data ',round(tmss,2)),xlab='Observed air temperature',ylab='Modelled air temperature')
+abline(a=0, b=1,col='red',lwd=1.5)
+plot(twtr~tobs,cex=0.05,main=paste('Weather data ',round(twss,2)),xlab='Observed air temperature',ylab='Weather data temperature')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+```
+
+
+# Tree trunk temperature observations & modelling
+
+## Tree trunk observations - temperature differences
+Using recreated air temperture timeseries for each tree - calculate difference with air temperature by daytime / nightitme across the monitoring period.
+
+Calculate thickness of layers
+runtreeemulator_v2(treeclimdata, depth, aspect, treeparams) 
+calls .initializevars_v2(microclim, tradius, thick, cs, rho, depth) 
+
+
+Smaller trees. --> Less difference between layers and less buffering
+
+```{r trunk_modelling}
+# Will treetrunk model used air temperatures derived from observations rather than output by micropoint modelling
+include_observed<-FALSE
+#outerlayers<-c(0.005,0.025,0.03,0.035); odepth<-0.0075; idepth<-0.05
+#outerlayers<-c(0.005,0.025,0.03,0.035); odepth<-0.0025; idepth<-0.045
+#outerlayers<-c(0.005,0.025,0.03,0.035); odepth<-0.0075; idepth<-0.05
+outerlayers<-c(0.02,0.02,0.02,0.02) # Sl less (less sapwood) USE this!!!!!
+odepth<-0.01 # layer =2
+idepth<-0.05  # layer 3
+
+for(site in c('AH','BE','CW','WH')){
+  trees<-trees_sf[which(trees_sf$Site==site),]
+  for(t in 1:nrow(trees)){
+    tree<-trees[t,]
+    id<-tree$id
+    spp<-tree$Tree_species
+    lon<-st_coordinates(tree)[1]
+    lat<-st_coordinates(tree)[2]
+    ### Get trunk parameters for spp/tree  
+    # Set radius from individual tree  - AH seem to have recorded circumf as radius
+    trunkp<-trunk_parameters(spp_params,spp,tradius,outerlayers) 
+    # Correct cph units to J/kg/K
+    trunkp$cs<-trunkp$cs*1000 # CHECK this!!!!!!!!!!!!!!!!!!!!!
+    
+    # Microclimate inputs
+    microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+    microclim$microclim$obs_time<- as.POSIXlt(microclim$microclim$obs_time) # CHECK this
+
+    # Weather input
+    weather<-microclim$weather
+    weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[length(microclim$microclim$obs_time)]),]
+    
+    # Replace modelled air temp with observations ?? check this!!!
+    if(include_observed) microclim$microclim$tair<-fill_observed_airtemp(id,microclim,obs_df)
+    # Interpolate to shorter timestep
+    #modin<-correct_lowrad(modin) # set radiation to 0 if zenith >90
+
+    #### Run model for chosen seg/lyrs
+    t0<-now()
+    # Outer N and S-facing layers
+    modelin<-preparevars(microclim$microclim,weather,lat,lon,mon=NA,timestep=NA)
+    tso<-runtreeemulator_v2(modelin, depth=odepth, aspect=180, trunkp)
+    tno<-runtreeemulator_v2(modelin, depth=odepth, aspect=1, trunkp)
+    # Inner N and S-facing layers
+    tsi<-runtreeemulator_v2(modelin, depth=idepth, aspect=180, trunkp)
+    tni<-runtreeemulator_v2(modelin, depth=idepth, aspect=1, trunkp)
+
+    
+    #tme<-get_datetime(microclimsp$year,microclimsp$month,microclimsp$day,microclimsp$hour)
+    results_df<-data.frame("id"=id, "datetime"= microclim$microclim$obs_time,
+                           "air_temp"=round(microclim$microclim$tair,3),
+                      "s_outer_temp"=round(tso,3), "n_outer_temp"=round(tno,3),
+                      "s_inner_temp"=round(tsi,3), "n_inner_temp"=round(tni,3) )
+    print(Sys.time()-t0)
+
+    saveRDS(results_df,file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+  }
+}
+
+```
+
+
+## Exploration of outputs
+Check those where N sides sometimes exceed south - eg wh_oak_1
+Lowering conductivity incrases Nouter compared to S inner
+```{r dy_graphs}
+yr<-2024
+
+id<-'ah_nsp_1'
+id<-'wh_oak_1'
+
+results_df<-readRDS(file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+
+# Dynamic graph
+title<-results_df$id[1]
+remove(tseries)
+tseries<- xts(x = results_df, order.by = results_df$datetime)
+dygraph(tseries, main=title) %>% dyAxis("y", label = "Temp (C)", valueRange=c(0,35)) %>% 
+  dyRangeSelector(height=20) %>%
+  dySeries("air_temp",color = 'grey') %>% 
+  dySeries("n_outer_temp",color = 'cyan') %>% 
+  dySeries("n_inner_temp",color = 'blue') %>% 
+  dySeries("s_outer_temp",color = 'orange') %>% 
+  dySeries("s_inner_temp",color = 'red') %>% 
+  dyLegend(width=600)
+
+#htmltools::tagList(fig)
+
+
+# Calc some simple stats
+diftso<-results_df$s_outer_temp-results_df$air_temp
+diftsi<-results_df$s_inner_temp-results_df$air_temp
+diftno<-results_df$n_outer_temp-results_df$air_temp
+diftni<-results_df$n_inner_temp-results_df$air_temp
+summary(diftso)
+summary(diftsi)
+summary(diftno)
+summary(diftni)
+```
+
+
+# Compare model with observed 
+
+Model - always outer layers > inner layers ie n_outer>s_inner NOT in new v
+Obs - often variaable - often both s facing are higher temp
+
+Model - generally lower max temps cf to air t than with observed. Tair 4deg> model Tsout deg> obs Tsout
+(Tair here is model Tair for model not obs - so not simply an effect of microppoint)
+
+Experiment
+Lower heat cap in model - more responsive to temp
+Try setting inner to layer 2 in model?
+Dif conductivity between segs than layers (more readily transmitted across lyrs?)
+
+```{r model_obs_cf}
+allresults_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
+
+make_cffig<-function(plotdata,title){
+  tseries<- xts(x = plotdata, order.by = plotdata$datetime)
+  dygraph(tseries, main=title,group='group1') %>% dyAxis("y", label = "Temp (C)", valueRange=c(0,35)) %>% 
+    dyRangeSelector(height=20) %>%
+    #dySeries("weather_temp",color = 'black') %>% 
+    dySeries("air_temp",color = 'black') %>% 
+    dySeries("n_outer_temp",color = 'cyan') %>% 
+    dySeries("n_inner_temp",color = 'blue') %>% 
+    dySeries("s_outer_temp",color = 'orange') %>% 
+    dySeries("s_inner_temp",color = 'red') %>% 
+    dyLegend(width=600)
+}
+
+ids<-c('ah_nsp_1','ah_nsp_2','ah_nsp_3','ah_nsp_4')
+#ids<-c('ah_oak_1','ah_oak_2','ah_oak_3','ah_oak_4','ah_oak_5')
+#ids<-c('wh_oak_1','wh_oak_2','wh_oak_3','wh_oak_4','wh_oak_5')
+# ids<-c('cw_nsp_1','cw_nsp_2','cw_nsp_3','cw_nsp_4','cw_nsp_5','cw_nsp_6')
+#ids<-c('cw_oak_1','cw_oak_2','cw_oak_3')
+
+yr<-2024
+figs<-list()
+
+for(id in ids){
+  # Load Model data
+  maxlai<-round(trees_sf$maxlai[which(trees_sf$id==id)],1)
+  results_df<-readRDS(file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+  tme<-results_df$datetime
+  air_temp<-results_df$air_temp
+  n_outer_temp <- results_df$n_outer_temp
+  n_inner_temp <- results_df$n_inner_temp
+  s_outer_temp <- results_df$s_outer_temp
+  s_inner_temp <- results_df$s_inner_temp
+
+  figdata<-data.frame("datetime"=tme,"air_temp"=air_temp,
+                    "n_outer_temp"=n_outer_temp, "n_inner_temp"=n_inner_temp, 
+                    "s_outer_temp"=s_outer_temp, "s_inner_temp"=s_inner_temp)
+  
+  figs[[paste0(id,'_mod')]]<-make_cffig(figdata, title=paste0(id,'_mod_',maxlai))
+    
+  # Observed data - only that included in model data
+  figdata<-allresults_df[which(allresults_df$id ==id & allresults_df$datetime %in% tme),
+                  c("datetime", "air_temp","n_outer_temp", "n_inner_temp", "s_outer_temp", "s_inner_temp")]
+  figs[[paste0(id,'_obs')]]<-make_cffig(figdata, title=paste0(id,'_obs'))
+}
+
+htmltools::tagList(figs)
+```
+
+
+
+## Some useful statistics for comparison
+
+### Create summary comparing model and observed by tree
+Compare by:  min, max, mean, std  of diurnal range, min, max, mean, for each location
+min, max, mean std of trunk-air temp for each location
+
+```{r comparison_table}
+trees<-trees_sf[which(trees_sf$Site!="KG"),]
+
+for(t in 1:nrow(trees)){
+  tree<-trees[t,]
+  id<-tree$id
+  spp<-tree$Tree_species
+  site<-tree$Site
+  
+  results_df<-readRDS(file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+  microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+  microclim$microclim$obs_time<- as.POSIXlt(microclim$microclim$obs_time) # CHECK this
+
+  # Calculate diurnal variation for each sector/layer of model output
+  doy<-as.numeric(strftime(results_df$datetime, format = "%j"))
+  
+  ### MODEL RESULTS
+  # Calculate max and min for each model location
+  msomax<-by(results_df$s_outer_temp,doy,max)
+  msomin<-by(results_df$s_outer_temp,doy,min)
+  msodif<-round(msomax-msomin,2)
+  msimax<-by(results_df$s_inner_temp,doy,max)
+  msimin<-by(results_df$s_inner_temp,doy,min)
+  msidif<-round(msimax-msimin,2)
+  mnomax<-by(results_df$n_outer_temp,doy,max)
+  mnomin<-by(results_df$n_outer_temp,doy,min)
+  mnodif<-round(mnomax-mnomin,2)
+  mnimax<-by(results_df$n_inner_temp,doy,max)
+  mnimin<-by(results_df$n_inner_temp,doy,min)
+  mnidif<-round(mnimax-mnimin,2)
+
+  # Model air temp dirunal var
+  mamax<-by(results_df$air_temp,doy,max)
+  mamin<-by(results_df$air_temp,doy,min)
+  madif<-round(mamax-mamin,2)
+  
+  # Model mean daily T
+  mamean<-by(results_df$air_temp,doy,mean)
+  msimean<-by(results_df$s_inner_temp,doy,mean)
+  msomean<-by(results_df$s_outer_temp,doy,mean)
+  mnimean<-by(results_df$n_inner_temp,doy,mean)
+  mnomean<-by(results_df$n_outer_temp,doy,mean)
+  
+  ### OBSERVED RESULTS - ONLTY WHERE OBSERVED RESULTS ARE AVAILABLE - WILL BE BIAS BY WHEN LOGGERS ARE ACTIVE
+  # Observed air temp (with/without modelled)
+  observed<-obsresults_df[which(obs_df$id==id),]
+  observed$datetime<-as.POSIXlt(observed$datetime,tz='UTC')
+  observed<-observed[which(observed$datetime>=results_df$datetime[1] & observed$datetime<=results_df$datetime[length(results_df$datetime)]),]
+  doyobs<-as.numeric(strftime(observed$datetime, format = "%j"))
+  
+  # Observed air
+  obamax<-by(observed$air_temp,doyobs,max)
+  obamin<-by(observed$air_temp,doyobs,min)
+  obadif<-as.numeric(obamax-obamin)
+  round(range(obadif,na.rm=T),2)
+  
+  # Observed trunk 
+  obsimax<-by(observed$s_inner_temp,doyobs,max)
+  obsimin<-by(observed$s_inner_temp,doyobs,min)
+  obsidif<-as.numeric(obsimax-obsimin)
+  round(range(obsidif,na.rm=T),2)
+  
+  obsomax<-by(observed$s_outer_temp,doyobs,max)
+  obsomin<-by(observed$s_outer_temp,doyobs,min)
+  obsodif<-as.numeric(obsomax-obsomin)
+  round(range(obsodif,na.rm=T),2)
+  
+  obnimax<-by(observed$n_inner_temp,doyobs,max)
+  obnimin<-by(observed$n_inner_temp,doyobs,min)
+  obnidif<-as.numeric(obnimax-obnimin)
+  round(range(obnidif,na.rm=T),2)
+  
+  obnomax<-by(observed$n_outer_temp,doyobs,max)
+  obnomin<-by(observed$n_outer_temp,doyobs,min)
+  obnodif<-as.numeric(obnomax-obnomin)
+  round(range(obnodif,na.rm=T),2)
+  
+  # Observed means
+  obamean<-by(observed$air_temp,doyobs,mean)
+  obsimean<-by(observed$s_inner_temp,doyobs,mean)
+  obsomean<-by(observed$s_outer_temp,doyobs,mean)
+  obnimean<-by(observed$n_inner_temp,doyobs,mean)
+  obnomean<-by(observed$n_outer_temp,doyobs,mean)
+  
+  stat<-c("daily_min","daily_max","daily_mean")
+  location<-c("s_outer","s_inner","n_outer","n_inner")
+  rows<-length(stat)*length(location)
+  mvals<-list(msomin,msimin,mnomin,mnimin,
+              msomax,msimax,mnomax,mnimax,
+              msomean,msimean,mnomean,mnimean)
+  ovals<-list(obsomin,obsimin,obnomin,obnimin,
+              obsomax,obsimax,obnomax,obnimax,
+              obsomean,obsimean,obnomean,obnimean)
+  
+  df<-data.frame(id=rep(id,rows),spp=rep(spp,rows),site=rep(site,rows),
+                         stat=rep(stat,each=length(location)),
+                         location=rep(location,length(stat)),
+                        model_mean=unlist(lapply(mvals,mean,na.rm=TRUE)),
+                        model_max=unlist(lapply(mvals,max,na.rm=TRUE)),
+                        model_min=unlist(lapply(mvals,min,na.rm=TRUE)),
+                        obs_mean=unlist(lapply(ovals,mean,na.rm=TRUE)),
+                        obs_max=unlist(lapply(ovals,max,na.rm=TRUE)),
+                        obs_min=unlist(lapply(ovals,min,na.rm=TRUE))
+  )
+  df$maxt_dif<-round(df$model_max-df$obs_max,2)
+  df$mint_dif<-round(df$model_min-df$obs_min,2)
+  df$meant_dif<-round(df$model_mean-df$obs_mean,2)
+  
+  if(t==1) compare_df<-df else compare_df<-rbind(compare_df,df) 
+}
+
+print(paste('Mean max T dif ',round(mean(compare_df$maxt_dif),2),
+            'Mean min T dif ',round(mean(compare_df$mint_dif),2),
+            'Mean mean T dif ',round(mean(compare_df$meant_dif),2) ) )
+
+filename<-"tree_cf_em_cs1000_kx2.csv"
+write.csv(compare_df,file.path(dir_microclim,filename))
+
+```
+
+### Distribution of diurnal variation   CHANGE THIS !!!!!
+
+```{r model_obs_ciurnal_range}
+obsresults_df<-results_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
+
+id<-'ah_oak_1' ; yr<-2024
+
+# Load data
+results_df<-readRDS(file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+microclim$microclim$obs_time<- as.POSIXlt(microclim$microclim$obs_time) # CHECK this
+weather<-microclim$weather
+
+# Calculate diurnal variation for each sector/layer of model output
+doy<-as.numeric(strftime(results_df$datetime, format = "%j"))
+
+### MODEL RESULTS
+# Calculate max and min for each model location
+msomax<-by(results_df$s_outer_temp,doy,max)
+msomin<-by(results_df$s_outer_temp,doy,min)
+msodif<-round(msomax-msomin,2)
+msimax<-by(results_df$s_inner_temp,doy,max)
+msimin<-by(results_df$s_inner_temp,doy,min)
+msidif<-round(msimax-msimin,2)
+mnomax<-by(results_df$n_outer_temp,doy,max)
+mnomin<-by(results_df$n_outer_temp,doy,min)
+mnodif<-round(mnomax-mnomin,2)
+mnimax<-by(results_df$n_inner_temp,doy,max)
+mnimin<-by(results_df$n_inner_temp,doy,min)
+mnidif<-round(mnimax-mnimin,2)
+
+
+# Model air temp dirunal var
+mamax<-by(results_df$air_temp,doy,max)
+mamin<-by(results_df$air_temp,doy,min)
+madif<-round(mamax-mamin,2)
+
+# Weather diurnal var
+wmax<-by(weather$temp,doy,max)
+wmin<-by(weather$temp,doy,min)
+wdif<-round(wmax-wmin,2)
+
+# Model mean daily T
+mamean<-by(results_df$air_temp,doy,mean)
+msimean<-by(results_df$s_inner_temp,doy,mean)
+msomean<-by(results_df$s_outer_temp,doy,mean)
+mnimean<-by(results_df$n_inner_temp,doy,mean)
+mnomean<-by(results_df$n_outer_temp,doy,mean)
+# Weather diurnal var
+wmean<-by(weather$temp,doy,mean)
+
+
+### OBSERVED RESULTS - ONLTY WHERE OBSERVED RESULTS ARE AVAILABLE - WILL BE BIAS BY WHEN LOGGERS ARE ACTIVE
+# Observed air temp (with/without modelled)
+observed<-obsresults_df[which(obs_df$id==id),]
+observed$datetime<-as.POSIXlt(observed$datetime,tz='UTC')
+observed<-observed[which(observed$datetime>=results_df$datetime[1] & observed$datetime<=results_df$datetime[length(results_df$datetime)]),]
+doyobs<-as.numeric(strftime(observed$datetime, format = "%j"))
+
+# Observed air
+obamax<-by(observed$air_temp,doyobs,max)
+obamin<-by(observed$air_temp,doyobs,min)
+obadif<-as.numeric(obamax-obamin)
+round(range(obadif,na.rm=T),2)
+
+# Observed trunk 
+obsimax<-by(observed$s_inner_temp,doyobs,max)
+obsimin<-by(observed$s_inner_temp,doyobs,min)
+obsidif<-as.numeric(obsimax-obsimin)
+round(range(obsidif,na.rm=T),2)
+
+obsomax<-by(observed$s_outer_temp,doyobs,max)
+obsomin<-by(observed$s_outer_temp,doyobs,min)
+obsodif<-as.numeric(obsomax-obsomin)
+round(range(obsodif,na.rm=T),2)
+
+obnimax<-by(observed$n_inner_temp,doyobs,max)
+obnimin<-by(observed$n_inner_temp,doyobs,min)
+obnidif<-as.numeric(obnimax-obnimin)
+round(range(obnidif,na.rm=T),2)
+
+obnomax<-by(observed$n_outer_temp,doyobs,max)
+obnomin<-by(observed$n_outer_temp,doyobs,min)
+obnodif<-as.numeric(obnomax-obnomin)
+round(range(obnodif,na.rm=T),2)
+
+# Observed means
+obamean<-by(observed$air_temp,doyobs,mean)
+obsimean<-by(observed$s_inner_temp,doyobs,mean)
+obsomean<-by(observed$s_outer_temp,doyobs,mean)
+obnimean<-by(observed$n_inner_temp,doyobs,mean)
+obnomean<-by(observed$n_outer_temp,doyobs,mean)
+```
+
+
+
+### Plot distribution of trunk tempertures
+Daily means - very similar for all temperatures - in observed bark has slightly higher observed daily menas than air temperature, while model predicts slightly cooler.
+Daily maxima - observed cooler by several degrees except for S-outer, while all coller in model
+
+WOULD EXPECT tree trunk model run from observed air temperatures will produce closer match??
+```{r model_obs_metrics}
+# Plot MODEL diurnal range
+model_plotdata<-data.frame("Diurnal_diff"= c(madif,msidif,msodif,mnidif,mnodif), 
+                     "Type"=c(rep('Air temperature',length(madif)),
+                             rep('S-inner trunk',length(msidif)),
+                                 rep('S-outer trunk',length(msodif)),
+                                 rep('N-inner trunk',length(mnidif)),
+                                 rep('N-outer trunk',length(mnodif))
+                             ) )
+ggdensity(model_plotdata, x = "Diurnal_diff", title='Model diurnal variation',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,18),ylim=c(0,0.6),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+
+
+# Plot Observed diurnal range
+obs_plotdata<-data.frame("Diurnal_diff"= c(obadif,obnidif,obnodif,obsidif,obsodif), 
+                     "Type"=c(rep('Air temperature',length(obadif)),
+                              rep('N-inner trunk',length(obnidif)),
+                              rep('N-outer trunk',length(obnodif)),
+                              rep('S-inner trunk',length(obsidif)),
+                                rep('S-outer trunk',length(obsodif))
+                             ) )
+
+ggdensity(obs_plotdata, x = "Diurnal_diff",title='Observed diurnal variation',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,18),ylim=c(0,0.6),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+
+# Plot Modelled temperatures
+mod_plotdata<-data.frame("Mean_Temperature"= c(mamean,mnimean,mnomean,msimean,msomean), 
+                     "Type"=c(rep('Air temperature',length(mamean)),
+                                 rep('N-inner trunk',length(mnimean)),
+                                 rep('N-outer trunk',length(mnomean)),
+                              rep('S-inner trunk',length(msimean)),
+                                 rep('S-outer trunk',length(msomean))
+                             ) )
+ggdensity(mod_plotdata, x = "Mean_Temperature",title='Model mean daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,30),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+
+# Plot Mean Observed temperatures
+obs_plotdata<-data.frame("Mean_Temperature"= c(obamean,obnimean,obnomean,obsimean,obsomean), 
+                     "Type"=c(rep('Air temperature',length(obamean)),
+                                rep('N-inner trunk',length(obnimean)),
+                                rep('N-outer trunk',length(obnomean)),
+                                rep('S-inner trunk',length(obsimean)),
+                                rep('S-outer trunk',length(obsomean))
+                             ) )
+ggdensity(obs_plotdata, x = "Mean_Temperature",title='Observed mean daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,30),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+
+######################## Plot Max Observed temperatures
+obmx_plotdata<-data.frame("Max_Temperature"= c(obamax,obnimax,obnomax,obsimax,obsomax), 
+                     "Type"=c(rep('Air temperature',length(obamax)),
+                                 rep('N-inner trunk',length(obnimax)),
+                                 rep('N-outer trunk',length(obnomax)),
+                             rep('S-inner trunk',length(obsimax)),
+                                 rep('S-outer trunk',length(obsomax))
+                             ) )
+ggdensity(obmx_plotdata, x = "Max_Temperature",title='Observed max daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,30),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+# Plot Modelled temperatures - outer and layer 3
+mmx_plotdata<-data.frame("Max_Temperature"= c(mamax,mnimax,mnomax,msimax,msomax), 
+                     "Type"=c(rep('Air temperature',length(mamax)),
+                                 rep('N-inner trunk',length(mnimax)),
+                                 rep('N-outer trunk',length(mnomax)),
+                             rep('S-inner trunk',length(msimax)),
+                                 rep('S-outer trunk',length(msomax))
+                             ) )
+ggdensity(mmx_plotdata, x = "Max_Temperature",title='Model max daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(0,30),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+
+######################## Plot MIN Observed temperatures
+obmn_plotdata<-data.frame("Min_Temperature"= c(obamin,obnimin,obnomin,obsimin,obsomin), 
+                     "Type"=c(rep('Air temperature',length(obamin)),
+                                 rep('N-inner trunk',length(obnimin)),
+                                 rep('N-outer trunk',length(obnomin)),
+                              rep('S-inner trunk',length(obsimin)),
+                                 rep('S-outer trunk',length(obsomin))
+
+                             ) )
+ggdensity(obmn_plotdata, x = "Min_Temperature",title='Observed min daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(-5,25),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+# Plot Modelled temperatures - outer and layer 3
+mmn_plotdata<-data.frame("Min_Temperature"= c(amax,nimin,nomin,simin,somin), 
+                     "Type"=c(rep('Air temperature',length(amax)),
+                                 rep('N-inner trunk',length(nimin)),
+                                 rep('N-outer trunk',length(nomin)),
+                             rep('S-inner trunk',length(simin)),
+                                 rep('S-outer trunk',length(somin))
+                             ) )
+
+ggdensity(mmn_plotdata, x = "Min_Temperature",title='Model min daily temperature',
+   add = "mean", rug = TRUE,
+   color = "Type", fill = "Type", xlim=c(-5,25),ylim=c(0,0.2),
+   palette = c("grey", "blue","cyan","red","orange"))
+
+```
+
+### Scatter of observed vs model 
+Modelled and observed diurnal range for all Species x Site trees.
+Weak diurnal range relationship - generally reduced in model.
+Modelled shows lower max and min daily values than observed.
+
+N outer temperatures - much higher observed values throughout all sites/trees
+Less difference in BE
+Greatest in WH?
+```{r scatter_doy_stat}
+site<-'WH'
+spp<-'nsp'
+########## Get model results and observed data by tree
+trees<-trees_sf[which(trees_sf$Site==site & trees_sf$Tree_species==spp),]
+
+moddif_list<-list();modmax_list<-list();modmin_list<-list();
+obsdif_list<-list();obsmax_list<-list();obsmin_list<-list();
+for (t in 1:nrow(trees)){
+  tree<-trees[t,]
+  id<-tree$id
+  # Load model data
+  results_df<-readRDS(file.path(dir_microclim,paste0(id,'_em_trunktemps_',yr,'.rds')))
+
+  # Calculate diurnal variation for each sector/layer of model output
+  doy<-as.numeric(strftime(results_df$datetime, format = "%j"))
+  
+  # Calculate max and min for each layer/segment by day
+  msomax<-by(results_df$s_outer_temp,doy,max)
+  msomin<-by(results_df$s_outer_temp,doy,min)
+  msodif<-round(msomax-msomin,2)
+  msimax<-by(results_df$s_inner_temp,doy,max)
+  msimin<-by(results_df$s_inner_temp,doy,min)
+  msidif<-round(msimax-msimin,2)
+  mnomax<-by(results_df$n_outer_temp,doy,max)
+  mnomin<-by(results_df$n_outer_temp,doy,min)
+  mnodif<-round(mnomax-mnomin,2)
+  mnimax<-by(results_df$n_inner_temp,doy,max)
+  mnimin<-by(results_df$n_inner_temp,doy,min)
+  mnidif<-round(mnimax-mnimin,2)
+  
+  moddif<-aperm(array(c(msidif,msodif,mnidif,mnodif),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme
+  modmax<-aperm(array(c(msimax,msomax,mnimax,mnomax),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme
+  modmin<-aperm(array(c(msimin,msomin,mnimin,mnomin),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme  
+  moddif_list[[id]]<-moddif
+  modmax_list[[id]]<-modmax
+  modmin_list[[id]]<-modmin
+
+  # Observed air temp (with/without modelled)
+  observed<-obsresults_df[which(obs_df$id==id),]
+  observed$datetime<-as.POSIXlt(observed$datetime,tz='UTC')
+  observed<-observed[which(observed$datetime>=results_df$datetime[1] & observed$datetime<=results_df$datetime[length(results_df$datetime)]),]
+  doyobs<-as.numeric(strftime(observed$datetime, format = "%j"))
+
+  # Observed air
+  obamax<-by(observed$air_temp,doyobs,max)
+  obamin<-by(observed$air_temp,doyobs,min)
+
+  # Observed trunk results
+  simax<-by(observed$s_inner_temp,doyobs,max)
+  simin<-by(observed$s_inner_temp,doyobs,min)
+  sidif<-as.numeric(simax-simin)
+
+  somax<-by(observed$s_outer_temp,doyobs,max)
+  somin<-by(observed$s_outer_temp,doyobs,min)
+  sodif<-as.numeric(somax-somin)
+
+  nimax<-by(observed$n_inner_temp,doyobs,max)
+  nimin<-by(observed$n_inner_temp,doyobs,min)
+  nidif<-as.numeric(nimax-nimin)
+
+  nomax<-by(observed$n_outer_temp,doyobs,max)
+  nomin<-by(observed$n_outer_temp,doyobs,min)
+  nodif<-as.numeric(nomax-nomin)
+  
+  obsdif<-aperm(array(c(sidif,sodif,nidif,nodif),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme
+  obsmax<-aperm(array(c(simax,somax,nimax,nomax),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme
+  obsmin<-aperm(array(c(simin,somin,nimin,nomin),dim=c(239,2,2)),c(3,2,1)) # asp(s,n),dims= dpth(i,o),tme
+  obsdif_list[[id]]<-obsdif
+  obsmax_list[[id]]<-obsmax
+  obsmin_list[[id]]<-obsmin
+}
+
+### Diurnal range comparison
+# S inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][1,1,])
+for(n in 1:length(obsdif_list)) obsvals<-c(obsvals,obsdif_list[[n]][1,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S inner range'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+# S outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][1,2,])
+for(n in 1:length(obsdif_list)) obsvals<-c(obsvals,obsdif_list[[n]][1,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S outer range'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][2,1,])
+for(n in 1:length(obsdif_list)) obsvals<-c(obsvals,obsdif_list[[n]][2,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'N inner range'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][2,2,])
+for(n in 1:length(obsdif_list)) obsvals<-c(obsvals,obsdif_list[[n]][2,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S outer range'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+### Max dailycomparison
+# S inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmax_list)) modvals<-c(modvals,modmax_list[[n]][1,1,])
+for(n in 1:length(obsmax_list)) obsvals<-c(obsvals,obsmax_list[[n]][1,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S inner max'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+# S outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmax_list)) modvals<-c(modvals,modmax_list[[n]][1,2,])
+for(n in 1:length(obsmax_list)) obsvals<-c(obsvals,obsmax_list[[n]][1,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S outer max'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmax_list)) modvals<-c(modvals,modmax_list[[n]][2,1,])
+for(n in 1:length(obsmax_list)) obsvals<-c(obsvals,obsmax_list[[n]][2,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'N inner max'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][2,2,])
+for(n in 1:length(obsmax_list)) obsvals<-c(obsvals,obsmax_list[[n]][2,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'N outer max'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+### Daily min
+# S inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmin_list)) modvals<-c(modvals,modmin_list[[n]][1,1,])
+for(n in 1:length(obsmin_list)) obsvals<-c(obsvals,obsmin_list[[n]][1,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S inner min'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+# S outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmin_list)) modvals<-c(modvals,modmin_list[[n]][1,2,])
+for(n in 1:length(obsmin_list)) obsvals<-c(obsvals,obsmin_list[[n]][1,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'S outer min'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N inner
+modvals<-c();obsvals<-c()
+for(n in 1:length(modmin_list)) modvals<-c(modvals,modmin_list[[n]][2,1,])
+for(n in 1:length(obsmin_list)) obsvals<-c(obsvals,obsmin_list[[n]][2,1,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'N inner min'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+
+# N outer
+modvals<-c();obsvals<-c()
+for(n in 1:length(moddif_list)) modvals<-c(modvals,moddif_list[[n]][2,2,])
+for(n in 1:length(obsmax_list)) obsvals<-c(obsvals,obsmax_list[[n]][2,2,])
+plot(modvals~obsvals,cex=0.2,main=paste(site,spp,'N outer min'),xlab='Observed',ylab='Modelled')
+abline(a=0, b=1,col='red',lwd=1.5)
+```
+
+
+
+
+
+### Tree trunk cross-section plot of model outputs
+```{r trunkplot}
+library(raster)
+library(fields)
+
+id<-'ah_nsp_1' ; yr<-2024
+ttoutput<-readRDS(file.path(dir_microclim,paste0(id,'_trunk_microclim_modat_whole_',yr,'.rds')))
+microclim<-readRDS(file.path(dir_microclim,paste0(id,'_microclim_',yr,'.rds')))
+microclim<-filter_microclimate(microclim,ttoutput$tme[1],ttoutput$tme[length(ttoutput$tme)])
+
+ttinput <- modelprep(microclim, trunkp)
+modin <- microspline(ttinput, secs=60)
+modin<-correct_lowrad(modin) # set radiation to 0 if zenith >90
+
+timestep<-30
+s<-which(modin@InputWeather$obs_time==as.POSIXlt("2024-06-25 00:00:00"))
+e<-s+48*60
+for (i in seq(s,e,timestep)) {
+    crossectionplot(modin, modout=ttoutput, i, zlim = c(10,33))
+}
+```
+
+
+
+
+
+
+### Plot canopy and weather temperatures
+
+```{r microclim_temp_plot}
+startday<-1. # 150
+endday<-366. # 210
+  for(yr in years){
+    for(site in c('AH','BE','CW','KG','WH')){
+      ttinput<-readRDS(file.path(dir_out,paste0('microclim_lai08_',site,'_',yr,'.rds')))
+      
+      tme<-as.POSIXct(ttinput@InputWeather$obs_time, tz='UTC')
+      tstep<-as.numeric(tme[2])-as.numeric(tme[1])
+      tperdoy<-(24*60*60)/tstep
+      
+      start<- startday*tperdoy
+      end<-min(length(tme),endday*tperdoy)
+      
+      tme<-tme[start:end]
+      tclim<-ttinput@InputWeather$temp[start:end]
+      tair<-ttinput@Microclimate$Tair[start:end]
+      tleaf<-ttinput@Microclimate$Tfoliage[start:end]
+
+      ymax<-max(c(tclim,tair))
+      ymin<-min(c(tclim,tair))
+      
+      #print(paste(ymin,ymax))
+      plot(tclim ~ tme, type = "l", cex.axis = 2, ylim=c(-5,ymax),
+           cex.lab = 2, lwd = 1, xlab = "Time", 
+           ylab = expression("Temperature (" * ~degree * C * ")"), 
+           col = 'grey',
+           main=id)
+      lines(tleaf ~ tme, col = 'red')
+      lines(tair ~ tme, col = 'green')
+  }
+}
+
+```
+
+
+
+
+### Differences between segments
+Max difference under PAI=2.5 ~3C - 
+Max difference under PAI=1 ~6C
+
+But short peaks where south facing segments< n facing - typically peaks about 3.30am and 19.30pm??? eg 6 & 7 July
+Sunrise/set ??? Rise - remains 0 despite zenith <90 set - zenith. BUT sunset shouldn't be till 21.30??? 
+https://www.calculatorsoup.com/calculators/time/sunrise_sunset.php
+
+Result sunrise set about 2hours earlier than expected???
+```{r segdiff}
+yr<-2010
+for(site in c('AH','BE','CW','KG','WH')){
+ttoutput<-readRDS(file.path(dir_out,paste0('ttout_',site,'_',yr,'.rds')))
+  
+  # Compare max difference between segements in outer layer
+  trng<-c()
+  sndif<-c()
+  for(i in 1:dim(ttoutput$Tout)[3]){
+    mxt<-max(ttoutput$Tout[1,,i])
+    mnt<-min(ttoutput$Tout[1,,i])
+    trng[i]<-mxt-mnt
+    sndif[i]<-ttoutput$Tout[1,8,i]-ttoutput$Tout[1,1,i]
+  }
+  print(paste('Maximum diffference in temperature between segments in outer layer =',max(trng)))
+  summary(trng)
+  hist(trng)
+  
+  summary(sndif)
+  ttoutput$tme[which(sndif< -1)]
+  
+  sel<-which(trng>2)
+  print(paste('Number of minutes where t difference >1C=', length(sel),'is', (length(sel)/length(trng))*100,'%'))
+  treeinspline@InputWeather[sel,]
+  ttoutput$Tout[,,sel[1:3]]
+}
+
+```
+
+
+
+### GDD 
+```{r gdd_calcs}
+# calculate day of year from hourly (daily min/max calculated) temperature data using a base temp and threshold
+# temps - hourly vector of temperatures
+# base_temp - the temperature from which accumulated degrees should be calculated
+# acc_gdd - the threshold of growing degree days at which indicator is reached
+# offset = number of hours from start to skip
+gdd_micro <- function(temps, tme, Tbase, acc_gdd, offset = 0) {
+  if(offset>0) {
+    temps[1:offset] <- 0 # turn offsetted values to 0
+  }
+  tstep<-as.numeric(tme[2])-as.numeric(tme[1]) # in mins
+  tdiv<-60*60*24/tstep
+  temprate<-(temps-Tbase) / tdiv
+  gdd<-cumsum(temprate)
+  #out <- min(which(gdd > acc_gdd)
+  
+  return(max(gdd))
+}
+
+# One minute interpolated data
+n_outer<-round(gdd_micro(temps=ttoutput$Tout[1,1,],tme=ttoutput$tme,Tbase=10,acc_gdd=NA),1)
+s_outer<-round(gdd_micro(temps=ttoutput$Tout[1,8,],tme=ttoutput$tme,Tbase=10,acc_gdd=NA),1)
+n_mid<-round(gdd_micro(temps=ttoutput$Tout[4,1,],tme=ttoutput$tme,Tbase=10,acc_gdd=NA),1)
+s_mid<-round(gdd_micro(temps=ttoutput$Tout[4,8,],tme=ttoutput$tme,Tbase=10,acc_gdd=NA),1)
+
+print(paste(n_outer,s_outer,n_mid,s_mid))
+
+
+```
+### Plots
+One minute plots - show anomalous dips (of about 1 to 10mins) in temperature  - reduction by 10C in one minute - usually around sundown or sunup.
+Eg Outermost layers only and only segments 12 to 1!!
+```{r plots}
+for(yr in years){
+  for(site in c('AH','BE','CW','KG','WH')){
+    ttoutput<-readRDS(file.path(dir_out,paste0('ttout_',site,'_',yr,'.rds')))
+    ttinput<-readRDS(file.path(dir_out,paste0('microclim_',site,'_',yr,'.rds')))
+    tme<-as.POSIXct(ttoutput$tme, tz='UTC')
+    tstep<-as.numeric(tme[2])-as.numeric(tme[1])
+    tperdoy<-(24*60*60)/tstep
+    start<-1#39000#30*tperdoy
+    end<-length(tme)#40200#
+    depth<-1
+    tn <- ttoutput$Tout[depth,1 , start:end]
+    ts <- ttoutput$Tout[depth,8 ,  start:end]
+    tme<-tme[start:end]
+    ymax<-max(ttoutput$Tout)
+    ymin<-min(ttoutput$Tout)
+    #print(paste(ymin,ymax))
+    plot(tn ~ tme, type = "l", cex.axis = 2, ylim=c(-5,ymax),
+         cex.lab = 2, lwd = 1, xlab = "Time", 
+         ylab = expression("Temperature (" * ~degree * C * ")"), 
+         col = 'blue',
+         main=paste(site,date(tme[1]),"-",date(tme[length(tme)]),"Interpolation: ",tstep,"secs"))
+    lines(ts ~ tme, col = 'red')
+    lines(ttinput@InputWeather$temp ~ as.POSIXct(ttinput@InputWeather$obs_time), col = 'grey')
+    lines(ttinput@Microclimate$Tair ~ as.POSIXct(ttinput@InputWeather$obs_time), col = 'green')
+  }
+}
+```
+
+
+
+## Model emulation
+Expect SW down and LAi interactions key
+ALso trunk aspect/depth
+
+### Macroclimate data
+
+
+
+
+
+# Instructions
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+```{r modelin-micrott}
+
+
+### Test using package data
+microin<-modelin(weather=microtreetrunk::weather,prec=microtreetrunk::prec,vegp=microtreetrunk::vegp,groundp=microtreetrunk::groundp,lat = 49.96807, long = -5.215668, reqhgt = 5, n = 100)
+microout <- runmicro(microin, interval = 300, iter = 5, tomax = 500)
+
+ttinput <- modelprep(microout, treeparams)
+treeinspline <- microspline(ttinput, secs=60)
+ttoutput<-runtreetrunk(treeinspline, fwet=0.1, tomax=NA, daysinit=1,smoothseg=FALSE)
+
+
+
+
+# Run next in global env to work
+mtvegp<-list(pait=vegp$pai,vegx=vegp$x,clump=vegp$clump,lref=vegp$lref,ltra=vegp$ltra, vehgt=vegp$h,em=vegp$em, 
+             gsmax=vegp$gsmax, leafd=vegp$leafd, paii=NA,skew=vegp$skew,spread=vegp$spread)
+mtgroundp<-list(slope=sitep$slope, aspect=sitep$aspect, gref=sitep$gref, soiltype="Silty clay loam")
+microin<-modelin(weather=microtreetrunk::weather,prec=microtreetrunk::prec,vegp=mtvegp,groundp=microtreetrunk::groundp,lat=lat,long=lon,reqhgt=1)
+load("data/CampNormTbl9_1.RData" )
+microin@vegp$pai<- with(microin@vegp,pait/(1-clump))
+#microin<-weatherspline(microin,secs=300)
+mcout<-runmicro(microin,interval=300)
+names(microtreetrunk::microout@InputWeather) # includes lwdown, zen, azi, si
+```
+
+## Test parameters code
+```{r test_params}
+years<-c(2010,2022)
+sites_sf<-sites_sf[which(sites_sf$site %in% c('BE','KG')),]
+laivals<-c(0.05,0.5,2.0,4.0)
+clumpvals<-c(0,0.7)
+leafdvals<-c(0.02,0.1)
+```
+

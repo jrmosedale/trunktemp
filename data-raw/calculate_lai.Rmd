@@ -1,0 +1,461 @@
+---
+title: "Calculate LAI"
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+#library(treetemp)
+library(devtools)
+load_all()
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(directlabels)
+
+# Dir for calculated lai
+#dir_lai<-"D:/MetOff_data/fieldwork/LAI_results"
+dir_lai<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/MetOff_data/field_data/LAI_results"
+
+# Dir containing all .dat files (can be in subdirectories)
+dir_picroot<-"D:/MetOff_data/fieldwork/Shared Canopy Pic Trial"
+pic_dirs<-list.dirs(dir_picroot,recursive=FALSE)
+
+# dir_data<-file.path("D:/MetOff_data/fieldwork/Shared Canopy Pic Trial",pic_dirs[1])
+
+
+# Set type of LAI calculation to usee - see read_lai_results
+#lai<-'LiCor' 
+
+```
+
+
+# Get LAI data for each site
+Processes .dat files written from hemisfer software. Extracts relevant information and LAI measurements.
+
+Creates long data format and saves
+
+
+```{r get_hemisfer_info}
+# Results df for all sites
+result_col_names<-c('site','spp','tree','treeid','date','lai000n','lai100n','lai000s','lai100s','lai0','lai100')
+
+allresults_df<-data.frame(matrix(ncol = length(result_col_names), nrow = 0))
+colnames(allresults_df)<-result_col_names
+result_col_names<-c("filepath","filename","date","treeid","site","spp","tree","asp","height",  
+ "lai","angle","transm","skyview","lggaps","Fmv","clump1","clump2","clump3", "clump")
+allresults_df<-data.frame(matrix(ncol = length(result_col_names), nrow = 0))
+colnames(allresults_df)<-result_col_names
+
+  
+for(dir_data in pic_dirs){
+  print(dir_data)
+
+  # Results for this site
+  results_df<-data.frame(matrix(ncol = length(result_col_names), nrow = 0))
+  colnames(results_df)<-result_col_names
+
+  # Get lai results and metadata of files
+  files<-list.files(dir_data,pattern="*.dat",full.names = TRUE, recursive=TRUE) # recursive - includes all subdirs
+  files<-files[which(basename(files)!='LAI.dat')]
+  fdata<-data.frame(t(sapply(files,read_lai_results)))
+  fdata<-as.data.frame(lapply(fdata,unlist),row.names = NULL)
+  fdata<-fdata[order(fdata$date,fdata$treeid,fdata$height,fdata$asp),]
+
+  # Reorganise data -  Date, TreeID n/s, Lai100, Lai000 - CORRECT ADJACENT DATES!!
+  for(tree in unique(fdata$treeid)){
+    treedata<-fdata[which(fdata$treeid==tree),]
+    
+    # Check and correct if dates within 1 day
+    tdates<-unique(as.POSIXlt(treedata$date))
+    tdates<-tdates[order(tdates)]
+    for(n in 2:length(tdates)){
+      #print(as.numeric(tdates[n]-tdates[n-1]))
+      if (as.numeric(tdates[n]-tdates[n-1])<=5){ 
+        print(paste('Correcting dates for tree',tree))
+        treedata$date[which(treedata$date==tdates[n-1])] <- as.character(tdates[n])
+      }
+    }
+    results_df<-rbind(results_df,treedata)
+  }
+  allresults_df<-rbind(allresults_df,results_df)
+} # dir_data
+
+write.csv(allresults_df,file.path(dir_lai,paste('lai_allsites_results.csv',sep='_')))
+```
+## Missing data
+2024-05-08 be_oak_1 N000 reading
+2024-06-20 cw_oak_3 N100 reading
+2024-06-19 wh_oak_2 S000 reading 
+2024-04-29 wh_oak_5 N100 reading
+
+## Estimate of clumping
+High variability between sites and trees but nevertheless NSP generally lower and more variable values than oak.
+
+
+Oak mean clunp = 0.95 (lower variability apart from AH and one tree in CW )
+NSP mean clump = 0.89 (high between tree variability (partic at WH least at AH)
+
+Omega = LAIe/LAI
+small omega - ratio needl and twig  - 
+
+
+To use tree average values across time period
+
+```{r plot_clumping}
+allresults_df<-read.csv(file.path(dir_lai,paste('lai_allsites_results.csv',sep='_')))
+
+# Mean clump (from rings 1 to 3) ro each height and aspect
+clumpwide_df<-as.data.frame(allresults_df %>% 
+                tidyr::pivot_wider(id_cols=c(treeid,date,site,spp,tree),
+                            names_from=c(asp,height),
+                            names_glue = "{asp}_{height}_clump", 
+                            values_from=c(clump) ) )
+clumpwide_df$clump_0<-apply(as.matrix(clumpwide_df[,6:7]),1,mean,na.rm=T)
+clumpwide_df$clump_100<-apply(as.matrix(clumpwide_df[,8:9]),1,mean,na.rm=T)
+
+# Plot clumping by sapp, site
+height<-100
+figlist<-list()
+for (site in unique(clumpwide_df$site)){
+  figlist[[site]]<-plot_param(clumpwide_df,site,height,'clump')
+  figname<-paste('clump',site,height,"treeplots.png",sep='_')
+  ggsave(file.path(dir_lai,figname),figlist[[site]])
+}
+lapply(figlist,print)
+
+height<-0
+figlist<-list()
+for (site in unique(clumpwide_df$site)){
+  figlist[[site]]<-plot_param(clumpwide_df,site,height,'clump')
+  figname<-paste('clump',height,site,"treeplots.png",sep='_')
+  ggsave(file.path(dir_lai,figname),figlist[[site]])
+}
+lapply(figlist,print)
+
+clump_stats<-clumpwide_df %>% group_by(spp, site) %>% 
+  summarise( mean100 = mean(clump_100,na.rm=T), sd100 = sd(clump_100,na.rm=T),mean0=mean(clump_0,na.rm=T),sd0=sd(clump_0,na.rm=T))
+
+print(clump_stats)
+
+spp_clump<-clumpwide_df %>% group_by(spp) %>% 
+  summarise( mean100 = mean(clump_100,na.rm=T), sd100 = sd(clump_100,na.rm=T),mean0=mean(clump_0,na.rm=T),sd0=sd(clump_0,na.rm=T))
+
+print(spp_clump)
+
+saveRDS(clumpwide_df,file.path(dir_lai,paste('clumping_allsites.Rds',sep='_')))
+```
+
+
+### Angle estimates
+Very high variation across time and trees - oak included many 0 values (completely flat). 
+Could be calculated per site to get more robust estimate.
+LAI-2000 LAI is independent of leaf angle
+In Thimonier LAI is dependent on leaf angle - angle could be corrected to exclude extreme values (~0 or)
+
+Mean values are:
+NSP = 43
+Oak = 18 (incl 0 values) or 36 (excluding 0 values)
+
+alpha leaf inclination
+
+```{r angle_plots}
+# Angle - very variable!
+anglewide_df<-as.data.frame(allresults_df %>% 
+                tidyr::pivot_wider(id_cols=c(treeid,date,site,spp,tree),
+                            names_from=c(asp,height),
+                            names_glue = "{asp}_{height}_angle", 
+                            values_from=c(angle) ) )
+anglewide_df$angle_0<-apply(as.matrix(anglewide_df[,6:7]),1,mean,na.rm=T)
+anglewide_df$angle_100<-apply(as.matrix(anglewide_df[,8:9]),1,mean,na.rm=T)
+
+height<-100
+figlist<-list()
+for (site in unique(anglewide_df$site)){
+  figlist[[site]]<-plot_param(anglewide_df,site,height,'angle')
+  figname<-paste('angle_',site,height,"treeplots.png",sep='_')
+  ggsave(file.path(dir_lai,figname),figlist[[site]])
+}
+lapply(figlist,print)
+
+height<-0
+figlist<-list()
+for (site in unique(anglewide_df$site)){
+  figlist[[site]]<-plot_param(anglewide_df,site,height,'angle')
+  figname<-paste('angle_',site,height,"treeplots.png",sep='_')
+  ggsave(file.path(dir_lai,figname),figlist[[site]])
+}
+lapply(figlist,print)
+
+
+# anglewide_df$angle_100<-ifelse(anglewide_df$angle_100==0,NA,anglewide_df$angle_100)
+# anglewide_df$angle_0<-ifelse(anglewide_df$angle_0==0,NA,anglewide_df$angle_0)
+
+sppste_angle<-anglewide_df %>% group_by(spp, site) %>% 
+  summarise( mean100 = mean(angle_100,na.rm=T), sd100 = sd(angle_100,na.rm=T),mean0=mean(angle_0,na.rm=T),sd0=sd(angle_0,na.rm=T))
+
+print(sppste_angle)
+
+spp_angle<-anglewide_df %>% group_by(spp) %>% 
+  summarise( mean100 = mean(angle_100,na.rm=T), sd100 = sd(angle_100,na.rm=T),mean0=mean(angle_0,na.rm=T),sd0=sd(angle_0,na.rm=T))
+
+print(spp_angle)
+
+saveRDS(anglewide_df,file.path(dir_lai,paste('leafangles_allsites.Rds',sep='_')))
+
+```
+
+
+## Plot tree LAIs
+Similar range in LAI values (0.4 to 4.5) for each spp but for Norway spruce such variation is primarily between trees and for oak over time.
+
+Choice of using:
+LiCaor-2000 method - LAI calc independent of estimate of angle 
+  LAI (uncorrected) NSP 0.81 to 3.65
+  LAI (uncorrected) Oak 0.42 to 4.48
+
+Thimonier LAI dependent on calc of angle
+  LAI (uncorrected) NSP 0.78 to 4.12
+  LAI (uncorrected) Oak 0.36 to 4.34
+
+
+```{r plot}
+library(ggplot2)
+library(directlabels)
+allresults_df<-read.csv(file.path(dir_lai,paste('lai_allsites_results.csv',sep='_')))
+
+# What LAI to plot?
+height<-'100'
+#height<-'0'
+lai<-"lc"
+lai<-"t"
+
+laiwide_df<-as.data.frame(allresults_df %>% 
+                pivot_wider(id_cols=c(treeid,date,site,spp,tree),
+                            names_from=c(asp,height),
+                            names_glue = "{asp}_{height}_lai", # change this for lai type
+                            values_from=paste0('lai_',lai) ) )     
+
+if(height=='000') laiwide_df$lai<-apply(laiwide_df[,c(6,7)],1,mean,na.rm=TRUE)
+if(height=='100') laiwide_df$lai<-apply(laiwide_df[,c(8,9)],1,mean,na.rm=TRUE)
+
+print(paste('NSp:',range(laiwide_df$lai[which(laiwide_df$spp=='nsp')])))
+print(paste('Oak:',range(laiwide_df$lai[which(laiwide_df$spp=='oak')])))
+
+# Plot
+ymin<-min(laiwide_df$lai)
+ymax<-max(laiwide_df$lai)
+
+for (site in unique(laiwide_df$site)){
+  plotdata<-laiwide_df[which(laiwide_df$site==site),]
+  plotdata<-plotdata[order(plotdata$treeid),]
+  plotdata$label<-paste0(plotdata$spp,'_',plotdata$tree)
+  fig<-ggplot(data = plotdata, aes(x = factor(date), y = lai, color = spp)) + 
+    ggtitle(paste("LAI",lai,"of trees from site",site)) + ylim(ymin,ymax) +
+    xlab("Date") + ylab(paste(lai,'at',height,'metres')) + 
+    geom_line(aes(group = treeid)) + geom_point() +
+    geom_dl(aes(label=label),method=list(dl.combine("first.points","last.points"),cex=0.7))
+  figname<-paste(lai,site,"treeplots.png")
+  ggsave(file.path(dir_lai,figname),fig)
+  print(fig)
+}
+
+# Basic stats
+sppste_lai<-laiwide_df %>% group_by(spp, site) %>% 
+  summarise( mean100 = mean(lai,na.rm=T), min100 = min(lai,na.rm=T),max100=max(lai,na.rm=T))
+
+spp_lai<-laiwide_df %>% group_by(spp) %>% 
+  summarise( mean100 = mean(lai,na.rm=T), min100 = min(lai,na.rm=T),max100=max(lai,na.rm=T))
+
+print(sppste_lai)
+print(spp_lai)
+
+```
+
+# Curve fitting to LAI
+Initial exploration using linear and polynomial model fitting.
+
+```{r curve-fitting}
+lai<-'lc'
+
+allresults_df<-read.csv(file.path(dir_lai,paste('lai_allsites_results.csv',sep='_')))
+
+# What LAI to plot?
+height<-100
+#height<-0
+lai<-"lc"
+# Exclude KG as few results?
+sites<-c('ah','be','cw','wh')
+
+laiwide_df<-as.data.frame(allresults_df[which((allresults_df$site %in% sites)),] %>% 
+                pivot_wider(id_cols=c(treeid,date,site,spp,tree),
+                            names_from=c(asp,height),
+                            names_glue = "{asp}_{height}_lai", # change this for lai type
+                            values_from=paste0('lai_',lai) ) )     
+
+
+
+
+if(height==0) laiwide_df$lai<-apply(laiwide_df[,c(6,7)],1,mean,na.rm=TRUE)
+if(height==100) laiwide_df$lai<-apply(laiwide_df[,c(8,9)],1,mean,na.rm=TRUE)
+
+for(t in unique(laiwide_df$treeid)){
+  modeldata<-laiwide_df[which(laiwide_df$treeid==t),]
+  modeldata$date<-as.numeric(strftime(as.POSIXct(modeldata$date), format = "%j"))
+  
+  # fit pollynomial regression models up to degree 5 
+  linear_model1 <- lm(lai~date, data=modeldata) 
+  linear_model2 <- lm(lai~poly(date,2,raw=TRUE), data=modeldata) 
+  linear_model3 <- lm(lai~poly(date,3,raw=TRUE), data=modeldata) 
+  linear_model4 <- lm(lai~poly(date,4,raw=TRUE), data=modeldata) 
+  linear_model5 <- lm(lai~poly(date,5,raw=TRUE), data=modeldata) 
+    
+  # create a basic scatterplot  
+  
+  plot(modeldata$date, modeldata$lai,main=t,ylim=c(0.4,4.5)) 
+    
+  # define x-axis values 
+  x_axis <- seq(50,300,10)
+    
+  if(modeldata$spp[1] =="nsp"){
+    lines(x_axis, predict(linear_model1, data.frame(date=x_axis)), col='green') 
+    lines(x_axis, predict(linear_model2, data.frame(date=x_axis)), col='red') 
+    #nsp_list[[t]]<-linear_model2
+  } else{
+      lines(x_axis, predict(linear_model2, data.frame(date=x_axis)), col='red') 
+      lines(x_axis, predict(linear_model3, data.frame(date=x_axis)), col='purple') 
+  }
+}
+```
+
+### Model calculation for predicting LAI
+DoY range for which there may be lai data = 69 to 269
+
+For Norway Spruce a quadratic equation was found to fit the range of observations (although in many cases this differed little from a simple linear model fit)
+
+For Oak a Weibull model (type 2) was found to fit observations - with the assumption that no significant leaf loss begins before the final LAI observation in late September or early October.
+
+R pacakage ref: https://www.statforbiology.com/2020/stat_nls_usefulfunctions/#weibull-function-type-1 
+
+Papers re shape of seasonal lai curve: https://www.mdpi.com/2072-4292/11/6/689 
+https://www.researchgate.net/figure/The-seasonal-course-of-leaf-area-index-LAI-values-of-a-lysimeter-grown-Vitis-vinifera_fig2_225666686
+https://bg.copernicus.org/articles/15/6885/2018/#&gid=1&pid=1
+
+deciduous forest: https://www.researchgate.net/publication/10703196_Leaf_dynamics_of_a_deciduous_forest_canopy_No_response_to_elevated_CO_2 
+Found photo derived LAI ~2 during growing season with peak of ~3 (whereas actual measured was >4)
+
+be nsp - very littl evariation - some eg nsp2 lower LAI in summer
+weibull cannot be fitted to some nsp
+
+```{r lai_model_calc}
+library(drc)
+library(drcSeedGerm)
+
+lai_models<-list()
+for(t in unique(laiwide_df$treeid)){
+  modeldata<-laiwide_df[which(laiwide_df$treeid==t),]
+  modeldata$date<-as.numeric(strftime(as.POSIXct(modeldata$date), format = "%j"))
+  n<-nrow(modeldata)
+  mindoy<-min(modeldata$date)
+  maxdoy<-max(modeldata$date)
+  
+  if(modeldata$spp[1] =="nsp"){
+    model<-lm(lai~poly(date,2,raw=TRUE), data=modeldata)  
+    # if likely u-shape (first and last obs > all others) then use linear model
+    if(all(modeldata$lai[1]>(modeldata$lai[2:(n-1)])) &
+       all(modeldata$lai[n]>(modeldata$lai[2:(n-1)]))){
+      model<-lm(lai~poly(date,1,raw=TRUE), data=modeldata)} 
+    # if -ve slope at beginning and +ve at end change to straight line
+    testdat<-predict(model, data.frame(date=seq(mindoy,maxdoy,1)))
+    if(testdat[2]-testdat[1]<0 & testdat[length(testdat)]-testdat[(length(testdat)-1)]>0) model<-lm(lai~date, data=modeldata)
+    
+    
+  }
+  if(modeldata$spp[[1]]=='oak') model <- drm(lai~date, fct =  W2.4(), data=modeldata)
+  
+  x_axis <- seq(60,270,10)
+  plot(modeldata$date, modeldata$lai,main=t,ylim=c(0,5),xlab = "Day of Year")
+  lines(x_axis, predict(model, data.frame(date=x_axis)), col='red') 
+
+  lai_models[[t]]<-model
+}
+
+saveRDS(lai_models,file.path(dir_lai,paste0(lai,'_lai_models.Rds')))
+```
+
+
+### Plot LAI curves for each tree by site
+
+
+```{r lai_bmodel_calc}
+library(drc)
+library(drcSeedGerm)
+library(aomisc)
+allresults_df<-read.csv(file.path(dir_lai,'lai_allsites_results.csv'),sep=',')
+
+# try cobs
+mx<-max(modeldata$lai)
+mn<-min(modeldata$lai)
+#con<-rbind(c(-1,max(modeldata$date),mx+0.1))
+r1<-c(-1,1,mn-0.5)
+r2<-c(-1,366,mn-0.5)
+
+r1<-c(0,60,mn)
+r2<-c(0,300,mn)
+
+
+con<-rbind(r1,r2)
+model<-cobs(modeldata$date,modeldata$lai,constraint="concave", pointwise=con)
+x_axis <- seq(1,366,10)
+plot(modeldata$lai~modeldata$date,main=t,xlim=c(60,280),ylim=c(0,5),xlab = "Day of Year")
+lines(predict(model,x_axis),col='red')
+
+
+
+lai_models<-list()
+for(t in unique(laiwide_df$treeid)){
+  modeldata<-laiwide_df[which(laiwide_df$treeid==t),]
+  modeldata$date<-as.numeric(strftime(as.POSIXct(modeldata$date), format = "%j"))
+  n<-nrow(modeldata)
+  
+  model <- drm(lai~date, fct =  DRC.bragg.3(), data=modeldata)
+  
+
+  
+  x_axis <- seq(60,270,10)
+  plot(modeldata$date, modeldata$lai,main=t,ylim=c(0,5),xlab = "Day of Year")
+  lines(x_axis, predict(model, data.frame(date=x_axis)), col='red') 
+
+  lai_models[[t]]<-model
+}
+
+#saveRDS(lai_models,file.path(dir_lai,paste0(lai,'_lai_models.Rds')))
+
+
+lai_models<-list()
+for(t in unique(laiwide_df$treeid)){
+  modeldata<-laiwide_df[which(laiwide_df$treeid==t),]
+  modeldata$date<-as.numeric(strftime(as.POSIXct(modeldata$date), format = "%j"))
+  n<-nrow(modeldata)
+  
+  # if(modeldata$spp[1]=='nsp') model<-lm(lai~poly(date,2,raw=TRUE), data=modeldata) 
+  if(modeldata$spp[1]=='nsp') model<-cobs(modeldata$date,modeldata$lai, constraint="concave")
+  if(modeldata$spp[1]=='oak') model <- drm(lai~date, fct =  W2.4(), data=modeldata)
+  
+  x_axis <- seq(60,270,10)
+  plot(modeldata$date, modeldata$lai,main=t,ylim=c(0,5),xlab = "Day of Year")
+  if(modeldata$spp[1]=='oak') lines(x_axis, predict(model, data.frame(date=x_axis)), col='red') 
+  if(modeldata$spp[1]=='nsp') lines(predict(model,x_axis))
+  lai_models[[t]]<-model
+}
+
+```
+
+
+
+

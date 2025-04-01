@@ -68,7 +68,7 @@ List solpositionCppv(double lat, double lon,
         std::vector<double> sp = solpositionCpp(lat, lon, year[i],
             month[i], day[i], hour[i]);
         zen[i] = sp[0];
-        azi[i] = sp[1];  
+        azi[i] = sp[1];
     }
     Rcpp::List out;
     out["zen"] = Rcpp::wrap(zen);
@@ -87,7 +87,7 @@ double satvapCpp(double tc)
     }
     return es;
 }
-// **  Dewpoint temperature ** // 
+// **  Dewpoint temperature ** //
 double dewpointCpp(double tc, double ea)
 {
     double e0;
@@ -123,10 +123,10 @@ double radabsoptioncpp(double Rdirdown, double Rdifdown, double Rswup,
     return Rabs;
 }
 // ** Calculates steady state temperature of tree trunk surface ** //
-double PenmonMonteithcpp(double Rabs, double tair, double windspeed, 
+double PenmonMonteithcpp(double Rabs, double tair, double windspeed,
     double relhum, double pk, double em, double treeradius, double dT, double surfwet, bool cap)
 {
-    // Calculate Pseudo - emmited radiation 
+    // Calculate Pseudo - emmited radiation
     double sb = 5.67 * pow(10.0, -8.0);
     double Rema = em * sb * pow(tair + 273.15, 4.0);
     // Calculate convective conductance
@@ -157,10 +157,9 @@ double PenmonMonteithcpp(double Rabs, double tair, double windspeed,
     return dTS;
 }
 // Run steady-state model through time
-// [[Rcpp::export]]   
 // ** Calculates steady state temperature of tree trunk surface ** //
 NumericVector SteadyState(DataFrame microclim, double refl,
-    double em, double treeradius, double surfwet, double aspect, 
+    double em, double treeradius, double surfwet, double aspect,
     bool cap)
 {
     // Extract data from data.frame
@@ -218,7 +217,7 @@ double energybalancecpp(double Rabs, double tair, double tsurf, double windspeed
     return Ba; // W/m^2
 }
 // Calculate tree trunk temperatures in one step
-// [[Rcpp::export]]   
+// [[Rcpp::export]]
 NumericMatrix onestepcpp(double Rdirdown, double Rdifdown, double Rswup,
     double Rlwup, double Rlwdown, double zen, double azi,
     double tair, double windspeed, double relhum, double pk,
@@ -306,7 +305,7 @@ NumericMatrix onestepcpp(double Rdirdown, double Rdifdown, double Rswup,
     return temps;
 }
 // Run first day repeatedly X times
-// [[Rcpp::export]]   
+// [[Rcpp::export]]
 NumericMatrix burnincpp(DataFrame microclim, int reps,
     double refl, double em, double treeradius, double surfwet,
     NumericMatrix ptemps, NumericVector kwood, NumericVector ldist,
@@ -343,7 +342,7 @@ NumericMatrix burnincpp(DataFrame microclim, int reps,
     return (temps);
 }
 // Run model
-// [[Rcpp::export]]   
+// [[Rcpp::export]]
 NumericMatrix runmodelcpp(DataFrame microclim, int n,
     double refl, double em, double treeradius, double surfwet,
     NumericMatrix ptemps, NumericVector kwood, NumericVector ldist,
@@ -376,7 +375,7 @@ NumericMatrix runmodelcpp(DataFrame microclim, int n,
     return (temps);
 }
 // Run model and extract data for one segment and layer
-// [[Rcpp::export]]   
+// [[Rcpp::export]]
 NumericVector runmodelthroughtime(DataFrame microclim, int seg, int lyr,
     double refl, double em, double treeradius, double surfwet,
     NumericMatrix ptemps, NumericVector kwood, NumericVector ldist,

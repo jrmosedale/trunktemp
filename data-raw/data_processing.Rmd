@@ -1,0 +1,702 @@
+---
+title: "Data Processing"
+output: html_document
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup, include=FALSE}
+prj <- system.file("proj", package = "terra")[1]
+Sys.setenv("PROJ_LIB" = prj)
+# 
+
+# install_github("ilyamaclean/mesoclim")
+# install_github("jrmosedale/mesoclimAddTrees")
+
+library(devtools)
+load_all() # Assuming run under treetemp R project/package
+
+#library(treetemp)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(mesoclim)
+library(mesoclimAddTrees)
+library(leaflet)
+library(sf)
+library(ncdf4)
+library(terra)
+library(dplyr)
+library(dygraphs)
+library(xts)
+library(lubridate)
+
+dir_root<-"D:/MetOff_data/fieldwork"
+dir_tinytag<-file.path(dir_root,"Tiny Tag Data","tt_last_csv")
+dir_surveytag<-file.path(dir_root,"Survey Tag Data")
+
+dir_od<-"C:/Users/jm622/OneDrive - University of Exeter"
+#dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
+
+dir_lai<-file.path(dir_od,"MetOff_data","field_data","LAI_results")
+
+dir_out<-file.path(dir_od,"MetOff_data/field_data/Logger_results")
+
+dir_field<-file.path(dir_od,"MetOff_data/field_data")
+dir_dtm<-file.path(dir_od,"Data/Terrain50")
+dir_era5<-file.path(dir_od,"Data/era5")
+dir_haduk<-file.path(dir_od,"Data/HadUK/2024")
+
+# File pathways
+dtm_file<-file.path(dir_dtm,"uk_dtm.tif")
+tree_file<-file.path(dir_field,"Field_data_locations.csv")
+site_file<-file.path(dir_field,"site_properties.csv") # general properties for modelling nsp at sites
+grid_file<-file.path(dir_od,'Data','OSgrids','os_bng_grids.gpkg')
+
+file.exists(dtm_file);file.exists(tree_file);file.exists(site_file); file.exists(grid_file)
+```
+
+
+# Location of field sites
+
+```{r data_prep, include=FALSE}
+# Location file (by tree)
+tree_locs<-read.csv(tree_file)
+site_props<-read.csv(site_file,strip.white = TRUE )
+sites<-unique(site_props$site,)
+
+# Site & tree geo data
+trees_sf<-st_as_sf(tree_locs,coords = c("lon", "lat"), crs = 4326)
+sites_sf<-st_as_sf(site_props,coords = c("lon", "lat"), crs = 4326)
+
+# Get site terrain data and extract slope, elev and aspect
+sites_27700<-st_transform(sites_sf,27700)
+e<-ext(st_bbox(sites_27700)) # extent of area with sites
+dtm<-rast(dtm_file)
+
+#terrain_r<-terrain(dtm,v=c("slope","aspect"))
+terrain_r<-rast(file.path(dir_dtm,"uk_terrain.tif"))
+elev<-terra::extract(dtm,sites_27700)
+slope<-terra::extract(terrain_r[["slope"]],sites_27700)
+aspect<-terra::extract(terrain_r[["aspect"]],sites_27700)
+sites_sf<-cbind(sites_sf,elev=elev$NH35,slope=slope$slope,aspect=aspect$aspect)
+
+# If required calculate site lat lon from mean of the trees there
+# sites<-data.frame(site=unique(locs$Site[order(locs$Site)]),lon=tapply(locs[,c("lon")],as.factor(locs$Site),mean),lat=tapply(locs[,c("lat")],as.factor(locs$Site),mean))
+```
+
+
+```{r sitemap}
+centre_pt<-as.numeric(st_coordinates(st_centroid(st_as_sfc(st_bbox(sites_sf)))))
+popup_text <- paste("<strong>Tree ID: </strong>",  trees_sf$Site, trees_sf$Tree_species, trees_sf$Tree)
+leaflet(options=list(minZoom=4)) %>%
+  setView(lng = centre_pt[1], lat = centre_pt[2], zoom = 7) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik,group="Streetmap") %>%
+  addCircleMarkers(data=trees_sf, 
+             popup = popup_text, 
+             color = ~ ifelse(Tree_species == "oak", "red", "blue"))
+```
+
+# Load climate temperature data for sites
+See Get_2024_weather.Rmd for preprocessing of 2024 Haduk data.
+
+During the main monitoring period (Feb to Oct), temperature were not lower than -3C and no higher than 33C.
+
+```{r,2024_weather}
+temp<-rast(file.path(dir_od,"MetOff_data","weather2024","temp_hrly_2024.tif"))
+plot(temp[[1]]); plot(sites_27700,add=T,col='red')
+tme<-time(temp)
+t2m<-t(extract(temp,vect(sites_27700),method="simple",ID=TRUE))
+
+t2m_df<-as.data.frame(t2m[2:dim(t2m)[1],],rownames=NULL)
+names(t2m_df)<-tolower(sites_sf$site)
+t2m_df$tme<-time(temp)
+rownames(t2m_df)<-NULL
+
+# Plot range of temperature values in monitoring period (Feb-Oct)
+sel<-which(t2m_df$tme>=as.POSIXct("2024-02-01") & t2m_df$tme<=as.POSIXct("2024-10-10"))
+for(ste in c('ah','be','cw','kg','wh')){
+  print(paste(ste,round(min(t2m_df$ah[sel]),2),'to',round(max(t2m_df$ah[sel]),2),'C'))
+}
+
+```
+
+# Load logger temperature readings 
+Site start/end dates:
+
+AH    NSP   17/02-19/10
+      OAK   17/02-22/09
+      
+BE    ALL   14/02-01/10
+
+CW    NSP   18/03-24/09
+      OAK1&2 03/04-11/10
+      OAK3  27/04-11/10
+      
+KG    ALL   01/03-18/09
+
+WH    ALL   22/03-02/10
+
+
+## Load surveytag downloads and organise
+
+```{r load_surveytags}
+#Survey tags
+stfiles<-list.files(dir_surveytag, pattern =".csv",recursive=TRUE,full.names=TRUE)
+
+# Extract metadata from file names and create id variable for matching files by tag/location
+for(f in stfiles){
+    metadata<-as.data.frame(get_surveytag_metadata(f))
+    metadata<-cbind(filepath=f,metadata)
+    if (f==stfiles[1]) file_metadata<-metadata else file_metadata<-rbind(file_metadata,metadata)
+}
+
+file_metadata$id=tolower(paste(file_metadata$site,file_metadata$spp,file_metadata$tree,sep='_'))
+head(file_metadata); nrow(file_metadata)
+View(file_metadata)
+
+# Number of files per id (tree) 
+table(file_metadata$id) # =5 to 9 files per tree
+
+# Number of different loggers per tree? BUt some loggers appear named the same?
+loggernum_df<-file_metadata %>%
+  group_by(id) %>%
+  summarize(logger_num = n_distinct(logger))
+View(loggernum_df)
+
+
+### Load and merge all files by tree id while performing quality control checks
+ids<-unique(file_metadata$id)
+
+columns <- c("id","site","spp","tree","type","datetime", "air_temp") 
+stagdata_df<- data.frame(matrix(nrow = 0, ncol = length(columns))) 
+colnames(stagdata_df) <- columns
+
+for(id in ids){ #  For each tree ID...
+  alldat<- data.frame(matrix(nrow = 0, ncol = length(columns))) 
+  colnames(alldat) = columns
+
+  #print(paste("Processing files for",id))
+  iddat_df<-file_metadata[which(file_metadata$id==id),]
+  # Check if info in file
+  finfo<-file.info(iddat_df$filepath)
+  ignore<-which(is.na(finfo$size))
+  if(length(ignore)>0){
+    warning(paste("Ignoring file",iddat_df$filepath[ignore]))
+    iddat_df<- iddat_df[-ignore,]
+  }
+
+  for(f in iddat_df$filepath){
+    tagdat<-load_surveytag(f,rnd30=FALSE)
+    tagdat$id<-id
+    alldat<-rbind(alldat,tagdat)
+  }
+  alldat<-alldat[order(alldat$datetime),]
+  
+  # Remove readings of 0.00000 as should be NA
+  alldat$air_temp<-ifelse(alldat$air_temp==0.00000,NA,alldat$air_temp)
+  
+  # Remove duplicate timed readings
+  dup<-duplicated(alldat$datetime)
+  alldat<-alldat[!dup,]
+  
+  # Remove excessively high/low readings 
+  minlimit<- -5
+  maxlimit<- 40
+  extrmT<-which(alldat$air_temp < minlimit | alldat$air_temp > maxlimit )
+  if(length(extrmT)>0) {
+    warning(paste('Removing extreme reading of',alldat$air_temp[extrmT], 'recorded by logger',alldat$id[extrmT],',   ') )
+    alldat<-alldat[-extrmT,]
+  }
+  
+  # Remove very isolated readings (no other within 1 hour) 
+  isolated_idx<-find_isolated_times(alldat$datetime,limit=3600)
+  if(length(isolated_idx>0)){ 
+    warning(paste('Removing',length(isolated_idx), 'isolated readings from' ,id))
+    alldat<-alldat[-isolated_idx,]
+  }
+  # Join all location data in single df
+  stagdata_df<-rbind(stagdata_df,alldat)
+}
+
+# Save results
+saveRDS(stagdata_df,file.path(dir_out,'surveytag_air_logger_results.Rds'))
+```
+
+### Plot surveytags by site and tree
+General issues for sites:
+
+AH - 
+BE - poor and erratic reliability during start of season
+CW - late start, NSP mid march, Oaks April
+KG - ~one month missing data for ALL trees 9th to 29th May ??
+WH - ~two months missing for ALL trees 24 May to 21 June & 24 Sept to 21 August??
+
+Loggers show several areas that look like spurious readings particularly at start or end of time series.
+Other larger periods of times where logge strays from other readings at site include be-nsp-5
+
+```{r ggplot_surveytags}
+stagdata_df<-readRDS(file.path(dir_out,'surveytag_air_logger_results.Rds'))
+
+# Plot temp timeseries
+minT<-min(stagdata_df$air_temp,na.rm=T)
+maxT<-max(stagdata_df$air_temp,na.rm=T)
+mintme<-min(stagdata_df$datetime)
+maxtme<-max(stagdata_df$datetime)
+
+
+for(ste in unique(stagdata_df$site)){
+  plotdata<-stagdata_df[which(stagdata_df$site==ste),]
+  allids <- unique(plotdata$id)
+  allids<-substr(allids,4,8)
+  oak_cols<-c('darkred','red','orange','pink','brown','yellow')
+  nsp_cols<-c('darkblue','blue','lightblue','cyan','purple','skyblue')
+  
+  no<-1;
+  nn<-1;
+  gcolors<-c()
+  for(i in allids){
+    if(substr(i,1,3)=='oak'){
+      gcolors<-c(gcolors,oak_cols[no])
+      no<-no+1
+      }
+    if(substr(i,1,3)=='nsp'){ 
+      gcolors<-c(gcolors,nsp_cols[nn])
+      nn<-nn+1
+    }
+  }
+
+  fig<-ggplot(data = plotdata, aes(x = datetime, y = air_temp, colour = id)) + 
+    ggtitle(paste("Site ",ste)) + 
+    ylim(minT,maxT) +
+    xlab("Date") + 
+    ylab(paste('Air temperature')) + 
+    geom_line(aes(group = id))+
+    scale_colour_manual(values=gcolors)+
+    scale_x_datetime(date_breaks = "months" , date_labels = "%b", limits=c(mintme,maxtme))
+  print(fig)
+}
+```
+
+## Load Tinytag data
+Input from output of Tinytag software Save Table as UTF no units .csv file.
+Assume black probe = deeper/inner; white probe = shallow/outer locations in trunk.
+
+Individual observations:
+AH oak-1-s  black probe sudden large increase (~5C) from 17/07 - REMOVE!!!
+AH oak-4-s black probe slight increase 30/06
+AH oak-5-s  black probe slight increase 02/09
+
+BE nsp-6-n Black probe large decline between 26*06-18/07 - REMOVE!!!
+
+CW oak-2-s black probe sudden large increase (~5C) from 15/07 - REMOVE!!!
+CW oak-2-n black probe slight increase from 22/09
+CW oak-3-n&s Starts 26/04
+
+WH nsp-2-s Starts 29/05
+WH nsp-4-n & s Black probe -40 until 18/04 13h then normal - REMOVE!!!
+WH oaks - generally white probe shows slight increase during summer then maintained (eg ~1-2C > black)
+WH-oak-3-s spike black spike 09/08 13h - 10/08 02h - REMOVE!!
+
+```{r load_multiple_tinytags}
+ttfiles<-list.files(dir_tinytag,pattern =".csv",recursive=TRUE,full.names=TRUE)
+#ttfiles<-ttfiles[which(substr(basename(ttfiles),1,2) %in% site_id)]
+
+# Results for all files and ids
+columns <- c("id","site","spp","tree","asp","type","datetime", "inner_temp","outer_temp") 
+ttagdata_df<- data.frame(matrix(nrow = 0, ncol = length(columns))) 
+colnames(ttagdata_df) = columns
+
+
+# Extract metadata from file names and create id variable for matching files by tag/location
+for(f in ttfiles){
+    metadata<-as.data.frame(get_tinytag_metadata(f))
+    metadata<-cbind(filepath=f,metadata)
+    if (f==ttfiles[1]) file_metadata<-metadata else file_metadata<-rbind(file_metadata,metadata)
+}
+
+file_metadata$id=tolower(paste(file_metadata$site,file_metadata$spp,file_metadata$tree,sep='_'))
+
+## Can now load and merge files by id
+ids<-unique(file_metadata$id)
+
+for(id in ids){
+  # id results df
+  alldat<- data.frame(matrix(nrow = 0, ncol = length(columns))) 
+  colnames(alldat) = columns
+
+  iddat_df<-file_metadata[which(file_metadata$id==id),]
+  for(f in iddat_df$filepath){
+    tagdat<-load_tinytag(f,rnd30=FALSE)
+    tagdat$id<-id
+    if(f==iddat_df$filepath[1]) alldat<-tagdat else alldat<-rbind(alldat,tagdat)
+  }
+  alldat<-alldat[order(alldat$datetime),]
+  
+  # Remove duplicate readings (but only if temp and datetime identical!)
+  dup<-duplicated(alldat)
+  alldat<-alldat[!dup,]
+  
+  # Join all location data in single df
+  ttagdata_df<-rbind(ttagdata_df,alldat)
+}
+
+# Remove excessively high/low readings 
+minlimit<- -10
+maxlimit<- 45
+extrmT<-which(ttagdata_df$inner_temp < minlimit | ttagdata_df$inner_temp > maxlimit )
+if(length(extrmT)>0) {
+  warning(paste('Removing extreme reading of',ttagdata_df$inner_temp[extrmT], 'recorded by logger',ttagdata_df$id[extrmT],',   ') )
+  ttagdata_df$inner_temp[extrmT]<-NA
+}
+extrmT<-which(ttagdata_df$outer_temp < minlimit | ttagdata_df$outer_temp > maxlimit )
+if(length(extrmT)>0) {
+  warning(paste('Removing extreme reading of',ttagdata_df$outer_temp[extrmT], 'recorded by logger',ttagdata_df$id[extrmT],',   ') )
+  ttagdata_df$outer_temp[extrmT]<-NA
+}
+
+
+# MANUAL CORRECTION FROM OBSERVATIONS to Black probe readings
+# ah-oak-1-s Black probe 17/07 6h to end
+sel<-which(ttagdata_df$fullid=='ah_oak_1_s' & ttagdata_df$datetime>=as.POSIXct("2024-07-17 06:00"))
+ttagdata_df$inner_temp[sel]<-NA
+
+# be-nsp-6-n Black probe 27/06 17h to 17/07 19.30
+sel<-which(ttagdata_df$fullid=='be_nsp_6_n' & ttagdata_df$datetime>as.POSIXct("2024-06-27 11:00") & ttagdata_df$datetime<as.POSIXct("2024-07-17 19:30"))
+ttagdata_df$inner_temp[sel]<-NA
+
+# cw-oak-2-s Black probe 15/07 7h  to end
+sel<-which(ttagdata_df$fullid=='cw_oak_2_s' & ttagdata_df$datetime>=as.POSIXct("2024-07-15 07:00"))
+ttagdata_df$inner_temp[sel]<-NA
+
+# wh-oak-3-s Black probe 08/08 22h to 10/08 5h
+sel<-which(ttagdata_df$fullid=='wh_oak_3_s' & ttagdata_df$datetime>as.POSIXct("2024-08-08 22:00") & ttagdata_df$datetime<as.POSIXct("2024-08-10 05:00"))
+ttagdata_df$inner_temp[sel]<-NA
+
+# Save results
+saveRDS(ttagdata_df,file.path(dir_out,'tinytag_bark_logger_results.Rds'))
+
+```
+
+### GGplot of ttag data by tree
+```{r ggplot_ttag_bytree, eval=FALSE}
+# Plot temp timeseries
+minT<-min(ttagdata_df[,c("inner_temp","outer_temp")],na.rm=T)
+maxT<-max(ttagdata_df[,c("inner_temp","outer_temp")],na.rm=T)
+mintme<-min(ttagdata_df$datetime)
+maxtme<-max(ttagdata_df$datetime)
+
+gcolors <- c("s_inner" = "red", "s_outer" = "orange", "n_inner"="blue", "n_outer" = "cyan")
+save<-FALSE
+
+for(id in unique(ttagdata_df$id)){
+  data<-ttagdata_df[which(ttagdata_df$id==id),]
+  inner<-data[,c('id','site','spp','tree','asp','type','datetime','inner_temp')]
+  outer<-data[,c('id','site','spp','tree','asp','type','datetime','outer_temp')]
+  names(inner)<-c(names(inner)[1:7],'temperature')
+  names(outer)<-c(names(outer)[1:7],'temperature')
+  inner$depth<-'inner'
+  outer$depth<-'outer'
+  plotdata<-rbind(inner,outer)
+  plotdata$location<-paste0(plotdata$asp,'_',plotdata$depth)
+  
+  
+  fig<-ggplot(data = plotdata, aes(x = datetime, y = temperature, colour = location)) + 
+    ggtitle(paste("Tree ",plotdata$id[1])) + 
+    ylim(minT,maxT) +
+    xlab("Date") + 
+    ylab(paste('Temperature')) + 
+    geom_line(aes(group = location))+
+    scale_colour_manual(values=gcolors)+
+    scale_x_datetime(date_breaks = "months" , date_labels = "%b", limits=c(mintme,maxtme))
+  
+  if(save){
+    figname<-paste0(id,"_trunk_temp_timeseries.png")
+    ggsave(file.path(dir_out,figname),fig)
+  }
+  print(fig)
+}
+```
+
+# Merge weather, air and trunk temperatures
+Merges timeseries - creates regular timeseries of readings for weather, air and bark temperatures.
+
+* Linear interpolates temperatures to regular time intervalsof 30mins.
+
+* Does NOT interpolate if no reading within 30mins.
+
+```{r merge_temps}
+# Order observations by datetime 
+stagdata_df<-stagdata_df[order(stagdata_df$id, stagdata_df$datetime),]
+ttagdata_df<-ttagdata_df[order(ttagdata_df$id,ttagdata_df$datetime),]
+
+# Create regular datetime series
+dt<-c(stagdata_df$datetime,ttagdata_df$datetime)
+dt_series<-regular_timeseries(dt,interval="30 mins")
+
+# Define results df
+colnames<-c("id", "site","spp","tree","datetime","air_temp","n_outer_temp","n_inner_temp","s_outer_temp","s_inner_temp")
+treeresults_df<-data.frame(matrix(NA,nrow=0,ncol=length(colnames)))
+names(treeresults_df)<-colnames
+
+
+# By tree id, merge and interpolate logger readings to common, regular time series
+# Define max time step for interpolating
+tme_thold<-1+(60*60) # 30mins in seconds
+
+for(tree_id in unique(stagdata_df$id)){
+  #print(tree_id)
+  # Get data for tree
+  sel<-which(stagdata_df$id==tree_id)
+  svydat<-stagdata_df[sel,]
+  ste<-unique(svydat$site)
+  
+  # Two sets of tinytag data - norht and south
+  sel<-which(ttagdata_df$id==tree_id & ttagdata_df$asp=="s")
+  ttgdat_s<-ttagdata_df[sel,]
+  sel<-which(ttagdata_df$id==tree_id & ttagdata_df$asp=="n")
+  ttgdat_n<-ttagdata_df[sel,]
+
+  results_df<-data.frame(
+    id=rep(unique(svydat$id),length(dt_series)),
+    site=rep(unique(svydat$site),length(dt_series)),
+    spp=rep(unique(svydat$spp),length(dt_series)),
+    tree=rep(unique(svydat$tree),length(dt_series)),
+    datetime=dt_series,
+    weather_temp=match_temperatures(t2m_df[,ste], t2m_df$tme, dt_series,tme_thold),
+    air_temp=match_temperatures(svydat$air_temp, svydat$datetime, dt_series,tme_thold),
+    n_outer_temp=match_temperatures(ttgdat_n$outer_temp, ttgdat_n$datetime, dt_series,tme_thold),
+    n_inner_temp=match_temperatures(ttgdat_n$inner_temp, ttgdat_n$datetime, dt_series,tme_thold),
+    s_outer_temp=match_temperatures(ttgdat_s$outer_temp, ttgdat_s$datetime, dt_series,tme_thold),
+    s_inner_temp=match_temperatures(ttgdat_s$inner_temp, ttgdat_s$datetime, dt_series,tme_thold)
+   )
+  # Collate into single df
+  if(tree_id == unique(stagdata_df$id)[1]) allresults_df<-results_df else allresults_df<-rbind(allresults_df,results_df)
+}
+
+saveRDS(allresults_df,file.path(dir_out,'logger_results.Rds'))
+```
+
+
+## Merge with modelled LAI data from hemisfer measurements and photos
+See:
+Values from fitting models to LAI observations derived from hemispherical photographs.
+Only available for AH, BE, CW & WH sites.
+
+
+```{r merge_lai}
+lai_type<-'lc'
+# Fitted models file
+lai_models<-readRDS(file.path(dir_lai,paste0(lai_type,'_lai_models.Rds')))
+
+allresults_df<-readRDS(file.path(dir_out,'logger_results.Rds'))
+
+allresults_df$lai<-NA
+for(t in names(lai_models)){
+  model<-lai_models[[t]] 
+  sel<-which(allresults_df$id==t)
+  # Get day of year from result datetime
+  doy<-lubridate::yday(allresults_df$datetime[sel])
+  pred_lai<-predict(model, data.frame(date=doy))
+  #print(plot(pred_lai~doy,main=t))
+  allresults_df$lai[sel]<-round(pred_lai,2)
+  #print(plot(allresults_df$lai[sel],main=t))
+}
+```
+
+## Compare air and weather temperatures
+
+### By site and manual editing of ait temperature data
+Dynamic graph for each site showing each tree air temperature and site weather temperature.
+Option: calculate average site air temp time series to infill where missing values? But KG and WH missing all logger readings for certain periods of time.
+
+Notes:
+be_nsp_5 survey tag recoridng about 5C lower than all others
+be_oak_1  survey tag show erratic behaviour - strings of 0s and NAs
+be_oak_3 - erratic - some 0.000 readings just before string of NAs
+
+
+```{r plot_air_weather_bysite}
+allresults_df<-readRDS(file.path(dir_out,'logger_results.Rds'))
+for(ste in unique(allresults_df$site)){
+  sitedata<-allresults_df[which(allresults_df$site ==ste),c("id","site","spp","tree","datetime","weather_temp", "air_temp")]
+  airdata<-as.data.frame(sitedata %>% 
+                           pivot_wider(id_cols=datetime,names_from=id,names_glue = "{id}_air", values_from=air_temp))
+  weatherdata<-sitedata$weather_temp[which(sitedata$id==unique(sitedata$id)[1])]
+  length(weatherdata)==nrow(airdata)
+  plotdata<-cbind(airdata,weather=weatherdata)
+  tseries<- xts(x = plotdata[,-1], order.by = plotdata$datetime)
+  ts_names<-names(tseries[,-1])
+  oak_names<-ts_names[which(substr(ts_names,4,6)=='oak')]
+  nsp_names<-ts_names[which(substr(ts_names,4,6)=='nsp')]
+  
+  dynfig <- dygraph(tseries) %>% dyAxis("y", label = "Temp (C)")
+  dynfig<-dynfig %>% dySeries("weather",color = 'black',strokeWidth = 1.5) 
+  for (nme in oak_names){
+    dynfig<-dynfig %>% dySeries(nme,color='purple')
+  }
+  for (nme in nsp_names){
+    dynfig<-dynfig %>% dySeries(nme,color='green')
+  }
+  print(dynfig)
+    #dyHighlight(highlightSeriesOpts = list(strokeWidth = 3))
+  htmltools::tagList(dynfig)
+}
+```
+Manual edits described in file applied and saved.
+
+```{r manual_edits}
+allresults_df<-readRDS(file.path(dir_out,'logger_results.Rds'))
+edits_file<-file.path(dir_field,"Logger_results","manual_airtemp_edits.csv")
+edits_df<-read.csv(edits_file)[,1:3]
+
+edits_df$start<-as.POSIXct(trim(edits_df$start),"%d/%m/%Y %H:%M", tz=tz(allresults_df$datetime))
+sel<-which(edits_df$start>as.POSIXct("31/03/2024 01:00","%d/%m/%Y %H:%M", tz=tz(allresults_df$datetime)))
+edits_df$start[sel]<-edits_df$start[sel]-60*60
+
+edits_df$end<-as.POSIXct(edits_df$end,"%d/%m/%Y %H:%M", tz=tz(allresults_df$datetime))
+sel<-which(edits_df$end>as.POSIXct("31/03/2024 01:00","%d/%m/%Y %H:%M", tz=tz(allresults_df$datetime)))
+edits_df$end[sel]<-edits_df$end[sel]-60*60
+
+
+edits_df
+for(n in 1:nrow(edits_df)){
+  sel<-which(
+    allresults_df$id==edits_df$id[n] &
+    as.numeric(allresults_df$datetime) >= as.numeric(edits_df$start[n]) &
+    as.numeric(allresults_df$datetime) <= as.numeric(edits_df$end[n]) )
+  allresults_df$air_temp[sel]<-NA
+}
+
+saveRDS(allresults_df,file.path(dir_out,'logger_results_stedit.Rds'))
+```
+
+Ah - summer buffering
+BE - more extreme day and night than weather
+CW - some daytime buffer in summer
+KG - low variation in air temps and from weather temp
+WH - some daytime buffering in summer
+
+### By tree
+Plot air and weather by individual tree - helps identify spurious survey tag readings
+
+```{r plot_air_weather_bytree, eval=FALSE}
+allresults_df<-readRDS(file.path(dir_out,'logger_results_stedit.Rds'))
+for(id in unique(allresults_df$id)){
+  plotdata<-allresults_df[which(allresults_df$id ==id),c("id","site","spp","tree","datetime","weather_temp", "air_temp")]
+  tseries<- xts(x = plotdata[,c('weather_temp','air_temp')], order.by = plotdata$datetime)
+  dynfig <- dygraph(tseries) %>% dyAxis("y", label = "Temp (C)")
+  print(dynfig)
+}
+```
+
+## Summarise air/weather differences by site and species
+Calculate temperature difference as: air temperature - weather temperature for each tree (-ve = where air temperature lower than weather).
+Plots distributions of difference for each site/species combination (ignoring values + or -10C or more).
+```{r hist_air_weather_difs}
+difdata<-allresults_df[which(!is.na(allresults_df$weather_temp) &  !is.na(allresults_df$air_temp)), c("id","site","spp","tree","datetime","weather_temp", "air_temp")]
+
+# +ve when air temp>climate (night) -ve if air temp < weather (day)
+difdata$diff_temp<-difdata$air_temp-difdata$weather_temp
+
+# Remove extrem values +/-10 or more
+difdata<-difdata[-which(difdata$diff_temp>10 | difdata$diff_temp< -10),]
+
+# Noxplot / histogram of difference freq by site/spp (season?) - 5x2 GRID plot
+par(mfrow=c(5,2))
+par(mar=c(1,1,1,1))
+# Calculate limits
+for (ste in unique(difdata$site)){
+  for (spp in unique(difdata$spp)){
+    sel<-which(difdata$site==ste & difdata$spp==spp)
+    plotdata<-difdata[sel,]
+    hist(plotdata$diff_temp,main=paste(ste,spp),xlim=c(-10,10), breaks=seq(-10,10,1))
+  }
+}
+
+```
+
+
+## Plot all data by tree: air, bark and weather temperatures
+In general inner and outer show buffered variation compared with air temp EXCEPT for certain times - where much higher peaks - due to direct radiation on trunks?
+Very slight phase shift when trunk temps bufferd ()
+
+Alice Holt
+Follow general pattern - buffered inner bark temperatures.
+ah_oak_3 example of elevated outer bark temperatures (sometimes greater than weather/canopy air temperatures) - cf with ah_oak_4 much more buffered bark temps
+
+Example wh_oak_5 - matches expected pattener of variation across weather, air, bark 
+
+
+NSP6 : very different n-facing trunk temperatures
+
+
+```{r plot_timeseries_bytree}
+# Plot temp timeseries
+allresults_df<-readRDS(file.path(dir_out,'logger_results_stedit.Rds'))
+
+for(id in unique(allresults_df$id)){
+  plotdata<-allresults_df[which(allresults_df$id ==id),
+                c("datetime","weather_temp", "air_temp",
+                  "n_outer_temp", "n_inner_temp", "s_outer_temp", "s_inner_temp")]
+  
+  tseries<- xts(x = plotdata, order.by = plotdata$datetime)
+
+  dynfig <- dygraph(tseries, main=id) %>% dyAxis("y", label = "Temp (C)")
+  dynfig<-dynfig %>% dySeries("weather_temp",color = 'black') 
+  dynfig<-dynfig %>% dySeries("air_temp",color = 'green') 
+  dynfig<-dynfig %>% dySeries("n_outer_temp",color = 'cyan') 
+  dynfig<-dynfig %>% dySeries("n_inner_temp",color = 'blue') 
+  dynfig<-dynfig %>% dySeries("s_outer_temp",color = 'orange') 
+  dynfig<-dynfig %>% dySeries("s_inner_temp",color = 'red') 
+  dynfig<-dynfig %>% dyLegend(width=600)
+  #dynfig<-dynfig %>% dyLegend(show="follow",labelsSeparateLines=TRUE)
+  
+  show(dynfig)
+
+}
+```
+
+
+# CUT OUTS
+
+### Plots of Inner and outer temperatures for each tree and location on trunk
+```{r plot_bark locations, eval=FALSE}
+ttagdata_df<-readRDS(file.path(dir_out,'tinytag_bark_logger_results.Rds'))
+
+# Plot temp timeseries by tree and aspect
+minT<-min(ttagdata_df[,c("inner_temp","outer_temp")],na.rm=T)
+maxT<-max(ttagdata_df[,c("inner_temp","outer_temp")],na.rm=T)
+
+for(fullid in unique(ttagdata_df$fullid)){
+  print(fullid)
+  plotdata<-ttagdata_df[which(ttagdata_df$fullid==fullid),]
+  plot_tseries(plotdata,title=fullid,ylimits=c(minT,maxT))
+}
+```
+
+### Plot differences in bark temperatures
+Calculate difference aas outer - inner bark temperatures for 
+A few anomalous differences
+ah-nsp-1-n - two brief dips to ~-5
+```{r plot_differences, eval=FALSE}
+ttagdata_df<-readRDS(file.path(dir_out,'tinytag_bark_logger_results.Rds'))
+
+ttagdata_df$dif_temp<-ttagdata_df$outer_temp-ttagdata_df$inner_temp
+minT<-min(ttagdata_df$dif_temp,na.rm=T)
+maxT<-max(ttagdata_df$dif_temp,na.rm=T)
+mintme<-min(ttagdata_df$datetime,na.rm=T)
+maxtme<-max(ttagdata_df$datetime,na.rm=T)
+
+for(fullid in unique(ttagdata_df$fullid)){
+  plotdata<-ttagdata_df[which(ttagdata_df$fullid==fullid),c('fullid','datetime','dif_temp')]
+  plot_tseries(plotdata,title=paste(fullid,": Outer - Inner bark difference (C)"), ylimits=c(minT,maxT),xlimits=c(mintme,maxtme))
+  abline(h=0)
+}
+```

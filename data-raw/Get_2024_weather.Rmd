@@ -1,0 +1,199 @@
+---
+title: "Get_2024_weather"
+author: "JR Mosedale"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r dirs}
+####### Create hourly temp series from era5 and haduk data ###########
+dir_od<-"C:/Users/jm622/OneDrive - University of Exeter"
+dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
+dir_out<-file.path(dir_od,"MetOff_data/field_data/Logger_results")
+
+dir_era5<-file.path(dir_od,"Data/era5")
+dir_haduk<-file.path(dir_od,"Data/HadUK/2024")
+
+site_file<-file.path(dir_field,"site_properties.csv") # general properties for modelling nsp at sites
+```
+
+## Site locations
+For cropping weather data
+```{r site_locations, include=FALSE}
+# Location file (by tree)
+tree_locs<-read.csv(tree_file)
+site_props<-read.csv(site_file,strip.white = TRUE )
+sites<-unique(site_props$site,)
+
+# Site & tree geo data
+trees_sf<-st_as_sf(tree_locs,coords = c("lon", "lat"), crs = 4326)
+sites_sf<-st_as_sf(site_props,coords = c("lon", "lat"), crs = 4326)
+
+# Get site terrain data and extract slope, elev and aspect
+sites_27700<-st_transform(sites_sf,27700)
+
+```
+
+## HadUK prepreocessing
+Write year file for 2024 Jan-Oct 10th
+```{r haduk_preprocess, include=FALSE}
+library(lubridate)
+dir_2024<-'/Users/jonathanmosedale/Data/HadUKgrid2024'
+dateseq <- seq(ymd("2024/01/01"), ymd("2024/10/10"), "day")
+
+maxt_files<-list.files(file.path(dir_2024,'maxtemp','2024'),recursive=TRUE,full.names = TRUE)
+var<-"daily_maxtemp"
+maxt_r<-rast(maxt_files,var)
+time(maxt_r)<-dateseq
+writeRaster(maxt_r,file.path(dir_haduk,'maxtemp_2024.tif'),overwrite=TRUE)
+
+mint_files<-list.files(file.path(dir_2024,'mintemp','2024'),recursive=TRUE,full.names = TRUE)
+var<-"daily_mintemp"
+mint_r<-rast(mint_files,var)
+mint_r<-mint_r[[1:(nlyr(mint_r)-1)]]
+time(mint_r)<-dateseq
+writeRaster(mint_r,file.path(dir_haduk,'mintemp_2024.tif'),overwrite=TRUE)
+
+
+rain_files<-list.files(file.path(dir_2024,'rainfall','2024'),recursive=TRUE,full.names = TRUE)
+var<-"daily_rainfall"
+rain_r<-rast(rain_files,var)
+time(rain_r)<-dateseq
+writeRaster(rain_r,file.path(dir_haduk,'rainfall_2024.tif'),overwrite=TRUE)
+```
+
+
+## Calculate hourly temperatures
+By merging HadUK fine resolution daily min/max with ERA5 hourly temperatures.
+
+Save hourly data for area covered by extent of sites 
+
+```{r, 2024_tempreature}
+# Create hourly temperature data for sites from era5 and haduk
+
+# HadUK (preprocessed)
+e<-extend(ext(st_bbox(sites_27700)),1000) # extent of area with sites
+mint_r<-crop(rast(file.path(dir_haduk,'mintemp_2024.tif')),e)
+maxt_r<-crop(rast(file.path(dir_haduk,'maxtemp_2024.tif')),e)
+
+ncfile<-file.path(dir_era5,"era5_surface_ukeire_2024.nc")
+nc<-nc_open(ncfile)
+era5vars <- names(nc$var)
+if ("expver" %in% era5vars)
+  tme <- as.POSIXlt(nc$var$expver$dim[[1]]$vals, tz = "GMT",
+                    origin = "1970-01-01")
+if (!"expver" %in% era5vars)
+  tme <- as.POSIXlt(time(rast(ncfile, "t2m")), tz = "UTC")
+nc_close(nc)
+
+tem<-rast(ncfile,'t2m')[[1]]
+t2m<-mesoclim:::.nctoarray(ncfile,'t2m',NA)
+t2m <- t2m - 273.15
+t2m<-mesoclim:::.rast(t2m,tem)
+time(t2m)<-tme
+names(t2m)<-tme
+
+# Make sure ends at same date as Haduk data
+t2m<-t2m[[1:(nlyr(mint_r)*24)]]
+
+# Calculate hourly temperatures at HadUK resolution
+temp<-mesoclim::blendtemp_hadukera5(mint_r, maxt_r, t2m)
+time(temp)<-time(t2m)
+names(temp)<-time(temp)
+
+writeRaster(temp,file.path(dir_od,"MetOff_data","weather2024","temp_hrly_2024.tif"),overwrite=TRUE)
+```
+
+## Other weather data (prob not required)
+
+```{r era5_data}
+# ERA5 Landsea mask and elevation
+lsm<-rast(file.path(dir_era5,"lsm.tif"),subds='lsm')
+geop<-mask(rast(file.path(dir_era5,"geopotential.tif")),ifel(lsm==0,NA,lsm))
+Re<-6371229 # earth radius
+g<-9.80665 # gravity
+era5elev<-(geop*Re) / (g*Re-geop)
+
+
+
+years<-c(2024)
+era5_reqvars<-c("t2m","d2m","sp","u10","v10","tp","fdir","ssrd","msdwlwrf")
+  
+# Check all ERA5 files  exist
+era5_allfiles<-file.path(dir_era5,paste0("era5_surface_ukeire_",years,".nc"))
+if(any(file.exists(era5_allfiles)==FALSE)) stop(paste("Missing ERA% input file",era5_allfiles[which(file.exists(era5_allfiles)==FALSE)]))
+
+# Crops to site or sites
+e<-ext(st_bbox(sites_sf))
+aoi<-crop(era5elev,e,snap='out')
+
+# For each Year get weather data for the area defined by bounding box around ALL sites
+for(yr in years){
+  t0<-Sys.time()
+  startdate<-as.POSIXlt(paste0(yr,"/01/01"))
+  enddate<-as.POSIXlt(paste0(yr,"/10/10"))
+  
+  # Get hourly era5 data  - corrects for radiation on hour, tme=POSIXlt UTC
+  era5file<-file.path(dir_era5,paste0("era5_surface_ukeire_",yr,".nc"))
+  climatedat<-era5toclimarray(ncfile=era5file, dtmc=era5elev, lsm=lsm, aoi=aoi, dtr_cor_fac = 1.285, toArrays=FALSE)  
+  names(climatedat)<-c("dtm","tme","windheight_m", "tempheight_m", "temp","relhum","pres","swdown","difrad","lwdown","windspeed","winddir","precip")
+  
+  # Get HadUK daily data - time = POSIXct tz=UTC
+  tasmax_r<-get_hadukdata(startdate, enddate, aoi=climatedat$dtm, filepath=dir_haduk, var='tasmax')
+  tasmin_r<-get_hadukdata(startdate, enddate, aoi=climatedat$dtm, filepath=dir_haduk, var='tasmin')
+  
+  # Calculate hourly temperatures from HadUK and ERA5 # No time value!
+  t2m1km_r<-blendtemp_hadukera5(tasmin_r,tasmax_r,climatedat$temp)
+  time(t2m1km_r)<-climatedat$tme
+    
+  # Recalculate rel humidity using downscaled temperature - DOES NOT WORK !!!!!!!
+  relhum1km_r<-relhumdownscale(as.array(climatedat$relhum), as.array(climatedat$temp), t2m1km_r, climatedat$dtm, rhmin = 20)
+  time(relhum1km_r)<-climatedat$tme
+  # swdownscale(climatedat$swdown, climatedat$tme, dtmf, climatedat$dtm, patchsim = FALSE, nsim= dim(climatedat$swdown)[3],terrainshade = FALSE)
+  
+  #### Extract weather data for each site ###
+  for(n in 1:nrow(sites_sf)){
+    ste_sf<-sites_sf[n,]
+
+    ## Extract climate data for location suitable as input for microclimate modelling
+    weather<-list()
+    weather$obs_time<-strftime(climatedat$tme, "%Y-%m-%d %H:%M:%S")
+    for (v in c("pres","swdown","difrad","lwdown","windspeed","winddir","precip")){
+      weather[[v]]<-as.vector(as.matrix(extract(climatedat[[v]],ste_sf,method="simple", cells=FALSE, ID=FALSE)))
+    }
+  
+    ## Correct radiation - assumes tz=UTC - can pass POSIX or text string times
+    # Correct to on the hour values (rather than mean flux) - cases where rad_dni>rad_glbl and where rad_dni==-ve
+    #rad_glbl <- rad_calc(weather$swdown, climatedat$tme, lon, lat)
+    #rad_dni <- rad_calc(weather$fdir, climatedat$tme, lon, lat)
+    #rad_dni<-ifelse(rad_dni<0,0,rad_dni)
+      
+    # Calculate diffuse - WHY si REQUIRES localtime!!!!
+    #jd = mesoclim:::.jday(as.POSIXlt(climatedat$tme))
+    #si = siflat(lubridate::hour(as.POSIXlt(climatedat$tme)), lat, lon, jd, merid = 0)
+    #weather$difrad <- rad_glbl - rad_dni * si # Downward diffuse radiation (W/m^2)
+    #weather$swdown<-rad_glbl # Downward direct shortwave radiation (W/m^2)
+    # weather$difrad<-weather$swdown-weather$fdir
+    
+    # Get temp and relhum??  data from 1km rasters
+    weather$temp<-as.vector(as.matrix(extract(t2m1km_r,ste_sf,method="simple", cells=FALSE, ID=FALSE)))
+    weather$relhum<-as.vector(as.matrix(extract(relhum1km_r,ste_sf,method="simple", cells=FALSE, ID=FALSE)))
+  
+    # Reorder
+    weather_names<-c("obs_time","temp","relhum","pres","swdown","difrad","lwdown","windspeed","winddir","precip" )
+    weather<-as.data.frame(weather[weather_names])
+    # Save weather data for year/site
+    saveRDS(weather,file.path(dir_out,paste0('climdata_',ste_sf$site,'_',yr,'.Rds')))
+  } # extract for each site
+    
+  print(Sys.time()-t0)
+  # save climate data
+  climatedat[which(!names(climatedat) %in% c("tme","windheight_m","tempheight_m"))]<-lapply(climatedat[which(!names(climatedat) %in% c("tme","windheight_m","tempheight_m"))],wrap)  
+  saveRDS(climatedat,file.path(dir_out,paste0('era5_climatedat_',yr,'.Rds')))
+}
