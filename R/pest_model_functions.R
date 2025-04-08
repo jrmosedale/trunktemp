@@ -401,7 +401,7 @@ run_dendroctonus<-function(T,Tair,tme){
     Tair<-Tair[which((doys<diapause_doy))]
 
 
-    ### Assume overwinter as pupa so must develop to adult - this pushes flight emergence back by 60-100 days (March-April)
+    ### Assume overwintered as pupa so must develop to adult - this pushes flight emergence back by 60-100 days (March-April)
     Tbase<-7.23
     ddend<-126
     rT<-ifelse(T>=Tbase, (T-Tbase) * tmerate, 0)

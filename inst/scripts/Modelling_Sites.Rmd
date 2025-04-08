@@ -89,16 +89,17 @@ spp_params<-read.csv(sppparam_file)
 rownames(spp_params)<-spp_params$name
 
 # Get tree field measurements
-treeparams<-read.csv(tree_file)
+#treeparams<-read.csv(tree_file)
 
 # Fitted models file
 lai_type<-'lc'
 
 ### Get internal datasets
-lai_models
-loggers_df<-system.file("loggers_df.rda", package = "trunktemp") 
-trees_sf
-sites_sf
+library(trunktemp)
+lai_models<-trunktemp::lai_models
+loggers_df<-trunktemp::loggers_df
+trees_sf<-trunktemp::trees_sf
+sites_sf<-trunktemp::sites_sf
 
 ```
 
@@ -357,7 +358,6 @@ get_datetime<-function(year,month,day,hour) as.POSIXct(paste(year,sprintf("%02d"
 Plot of field sites and where available individual tree locations.
 
 ```{r map_sites}
-
 centre_pt<-as.numeric(st_coordinates(st_centroid(st_as_sfc(st_bbox(sites_sf)))))
 popup_text <- paste("<strong>Tree ID: </strong>",  trees_sf$Site, trees_sf$Tree_species, trees_sf$Tree, 
                     "Max lai=",round(trees_sf$maxlai,1), "Height=",round(trees_sf$Tree_height,0))
@@ -377,8 +377,6 @@ HOWEVER this does not capture seasonal variation partic for deciduous canopies
 
 
 ```{r logger_data, include=FALSE}
-loggers_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
-
 # Ensure weather temperatures correct
 trees_df<-st_drop_geometry(trees_sf[,c('id','subsite')])
 loggers_df<-left_join(loggers_df,trees_df,by="id")
@@ -392,7 +390,6 @@ for(id in unique(loggers_df$id)){
   loggers_df$weather_temp[sel]<-wtemp
 }
 
-#loggers_df<-loggers_df[which(!is.na(loggers_df$weather_temp)),]
 startdate<-as.POSIXct("2024-02-12 00:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_df$datetime))
 enddate<-  as.POSIXct("2024-10-10 23:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_df$datetime))
 loggers_df<-loggers_df[which(loggers_df$datetime>=startdate & loggers_df$datetime<=enddate),]
@@ -417,33 +414,6 @@ figs<-lapply(figdata,makeawfig)
 lapply(figs,print)
 ```
 
-
-### LAI data - all trees except KG
-Predicted LAI development from fitting models to observed LAI derived from canopy photos.
-
-```{r lai_data}
-# Tree data
-clumping_df<-readRDS(file.path(dir_lai,paste('clumping_allsites.Rds',sep='_')))
-langles_df<-readRDS(file.path(dir_lai,paste('leafangles_allsites.Rds',sep='_')))
-
-# Plot example LAI curves for AH
-par(mfrow=c(2,2))
-layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE), widths = lcm(5), heights =lcm(5))
-for(site in c('AH','BE','CW','WH')){
-  trees<-trees_sf[which(trees_sf$Site==site),]
-  for(t in 1:nrow(trees)){
-    laimod<-lai_models[[trees$id[t]]]
-    #tme<-unique(obs_df$datetime)
-    tme<-unique(loggers_df$datetime)
-    doy_seq<-unique(as.numeric(strftime(as.POSIXct(tme), format = "%j")))
-    lai_seq<-predict(laimod, data.frame(date=doy_seq))
-    plotdata<-data.frame("doy"=doy_seq,"lai"=lai_seq)
-    if (trees$Tree_species[t]=='nsp') col<-'green'
-    if (trees$Tree_species[t]=='oak') col<-'purple'
-    if(t==1) print(plot(plotdata$doy, plotdata$lai,col=col,type='l',ylab="Model LAI", ylim=c(0,5),xlab = "Day of Year")) else lines(plotdata$doy, plotdata$lai,col=col) 
-  }
-}
-```
 
 ### Describe relationship air to weather temperature
 Generally beneath mean canopy air temperatures lower than weather temperatures (mean dif ~ 1deg) by up to 5+ degrees (sunny day temperatures?).
@@ -479,6 +449,7 @@ Absolute difference between weather and beneath canopy temperatures shows only a
 tdif_df<-loggers_df[which(loggers_df$site!='kg'),]
 #tdif_df$tdiff<-tdif_df$weather_temp-tdif_df$air_temp
 tdif_df$tdiff<-tdif_df$air_temp-tdif_df$weather_temp
+
 tdif_df$lai<-NA              
 for (id in unique(tdif_df$id)){
     sel<-which(tdif_df$id==id)
@@ -488,19 +459,6 @@ for (id in unique(tdif_df$id)){
     lai_seq<-predict(laimod, data.frame(date=doy_seq))
     lai_seq<-ifelse(lai_seq<0.1,0.1,lai_seq)
     tdif_df$lai[sel]<-lai_seq
-}
-
-par(mfrow=c(1,1))
-
-# Plot for all trees/hours
-plot(tdif_df$lai,(tdif_df$tdiff),xlim=c(0,4),ylim=c(0,10),ylab='Air - Weather temperature',xlab='Modelled LAI',main='Air-Weather Difference vs LAI',cex=0.05)
-
-# Plot by hour
-for(hr in c(0:23)){
-  plotdata<-tdif_df[which(hour(tdif_df$datetime)==hr),]
-  plot(plotdata$lai,plotdata$tdiff,xlim=c(0,4),ylim=c(0,10),ylab='Temp difference by hr',xlab='Modelled LAI',main=hr,,cex=0.2)
-    abline(lm(plotdata$tdiff ~ plotdata$lai))
-
 }
 ```
 
@@ -520,8 +478,6 @@ for(site in c('ah','be','cw','wh')){
 solarpos<-micropoint::solarposition(tdif_df$lat,tdif_df$lon,as.POSIXlt(tdif_df$datetime),NA,NA,NA,merid=0,dst=0)
 tdif_df$szenith<-solarpos$zen
 
-plot(tdif_df$szenith,tdif_df$tdiff,xlim=c(25,145),ylim=c(0,10),ylab='Temperature difference',xlab='Solar zenith',main='Temp diff vs Solar zenith',cex=0.05,col=as.factor(plotdata$site))
-
 # By solar angle group
 minsa<-min(tdif_df$szenith)
 tdif_df$szgrp<-as.numeric(cut_number(tdif_df$szenith,12))
@@ -539,12 +495,11 @@ for(hr in c(min(tdif_df$szgrp):max(tdif_df$szgrp))){
   
   print(abline(tmodel_list[[hr]]))
 }
-# Could now calculate air_temp fill values on basis of solar zenith and lai
-
 ```
 
 ### Fill in air_temperature readings where missing based on hourly relationship to weather temperature
-Still ignoring KG sites as missing LAI
+Relationship between LAI, solar zenith and the temperature difference between weather and beneath canopy air temperatures can be exploited to approximate beneath canopy temperatures where loggers failed.
+(Still ignoring KG sites as missing LAI)
 ```{r fill_airtemp, include=FALSE,eval=FALSE}
 obs_list<-list()
 for(t in 1:nrow(trees_sf)){
@@ -563,7 +518,7 @@ obs_df<-do.call("rbind", obs_list)
 
 Use solar altitude and LAI to predict air temperatures from weather temperature where no observations.
 ```{r fill_airtemp_solarhr, eval=FALSE}
-#obs_df<-fill_airtemp_solar(tdif_df,tmodel_list)
+obs_df<-fill_airtemp_solar(tdif_df,tmodel_list)
 ```
 
 Example plot of filled air temperature data
@@ -593,17 +548,12 @@ dygraph(tseries, main="Reconstructed air temperature series",group='group1') %>%
 ```
 
 
-
-
 # Microclimate modelling and Prepare data for treetrunk model
 Derives beneath canopy conditions from weather, ground vegetation and soil data.
-
-LAI - from fitted model to observed tree data
-Clumping - set to 0
+PAI - from fitted model to observed tree data
 Leaf angle - average species values derived from Thimonier LAI calculation Oak = 20, NSP = 43
 Tree height - correction factor applied of *0.25 to better match observed temperatures
 Modelling in (5) day steps to incorporate LAI evolution as predicted from fitted models.
-
 Excludes KG trees as no LAI data - TO DO add proxy values
 
 ```{r microclimate_model, warnings=FALSE, }
@@ -611,6 +561,8 @@ Excludes KG trees as no LAI data - TO DO add proxy values
 yr<-2024
 startdate<-as.POSIXlt("2024/02/12 00:00",tz='GMT')
 enddate<-as.POSIXlt("2024/10/10 23:00",tz='GMT')
+
+# Correction factor introduced to improve micropoint estimation of beneath canopy temperatures
 height_correction<-0.25
 
 # For every subsite...
@@ -633,7 +585,6 @@ for(s in subsites){
   # load weather - REPLACE THIS BY RERUNNING CORRECTED weather  creation CODE in prepare_2024_weather.R
   weather<-read.csv(file.path(dir_weather,paste0('weather_',s,'_',yr,'.csv')))
   weather<-weather[which(weather$obs_time>=startdate & weather$obs_time<=enddate),]
-  #weather$obs_time<-as.character(weather$obs_time)
 
   # Determine sequence of start and end dates for running models with updated LAI
   timestep<-24*5
@@ -679,35 +630,33 @@ for(s in subsites){
       end<-endseq[i]
       steppai<-max(lai_seq[i],0.1)
       vegp$pai<- steppai
-      canopymc<-suppressWarnings(runpointmodel_temp(weather[start:end,],
-                                                    reqhgt=hgt_up_trunk, 
-                                                    vegp=vegp, paii=NA, groundp=sitep,
-                                                    lat=lat,long=lon,zref=2, uref=2, 
-                                                    surfwet=0.1,runchecks =TRUE))
+      #canopymc<-suppressWarnings(runpointmodel_temp(weather[start:end,],reqhgt=hgt_up_trunk, vegp=vegp, paii=NA, groundp=sitep,
+      #                                              lat=lat,long=lon,zref=2, uref=2, surfwet=0.1,runchecks =TRUE))
+      canopymc<-suppressWarnings(runpointmodel(weather[start:end,],reqhgt=hgt_up_trunk,vegp,paii=NA,sitep,lat=lat,long=lon,zref=2, uref=10))
       canopymc_list[[i]]<-canopymc
     }
     canopymc<-do.call(rbind, canopymc_list)
     
     # Check for any NA values and plot timeseries
     nasteps<-which(unlist(lapply(canopymc_list,anyNA)))
-    #ggplot(data=canopymc, aes(x=obs_time, y=tair)) +geom_line()
-    
+
     ### Create microclimate output for tree trunk modelling 
     ### include driving weather temperature, latlon,veg & site parameters
     microclim<-list(microclim=canopymc,weather=weather,lat=lat,lon=lon,vegp=vegp,sitep=sitep)
     filename<-file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds'))
-    print(filename)
+    #print(filename)
     saveRDS(microclim,filename)
   } #tree
 } # site
 ```
 
 
-
+## Plot sample timeseries of weather, observed and modelled beneath-canopy temperatures
+Model appears to underestimate air temperastures beneath the canopy, especially when weather temperature >20 or <5 degrees.
 
 ```{r plot_microclim_airtemp, eval=FALSE,include=FALSE}
 ### Plot weather, modelled and observed air temps - compare different micropoint methods
-id<-'ah_nsp_1'
+id<-'be_nsp_5'
 plot_dfig<-FALSE
 par(mfrow=c(1,2))
 
@@ -716,16 +665,16 @@ microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
 plotdata<-data.frame(
   "id"=id,"datetime"=as.POSIXct(microclim$weather$obs_time,"%Y-%m-%d %H:%M:%OS", tz='UTC')[which(microclim$weather$obs_time %in% loggers_df$datetime)],
   "weather_temp"=microclim$weather$temp[which(microclim$weather$obs_time %in% loggers_df$datetime)],
-  "obs_air_temp"=loggers_df$air_temp[which(loggers_df$id==id & loggers_df$datetime %in% microclim$weather$obs_time)],
-  "model_air_temp"=microclim$microclim$tair[which(microclim$weather$obs_time %in% loggers_df$datetime)]
+  "obs_air_temp"=loggers_df$air_temp[which(loggers_df$id==id & loggers_df$datetime %in% microclim$weather$obs_time)] #,
+  #"model_air_temp"=microclim$microclim$tair[which(microclim$weather$obs_time %in% loggers_df$datetime)]
 )
 
 tseries<- xts(x = plotdata, order.by = plotdata$datetime)
-dygraph(tseries, main=plotdata$id[1],group='group1') %>% dyAxis("y", label = "Temp (C)") %>%
+dygraph(tseries, main=plotdata$id[1],group='group1') %>% dyAxis("y", label = "Temp (C)",valueRange=c(0,32)) %>%
 dyRangeSelector(height=20) %>%
 dySeries("weather_temp",color = 'black') %>%
-dySeries("obs_air_temp",color = 'green') %>%
-dySeries("model_air_temp",color = 'blue') %>%
+dySeries("obs_air_temp",color = 'red') %>%
+#dySeries("model_air_temp",color = 'blue') %>%
 dyLegend(width=600)
 
 # Plot air_t modelled vs obs airT
@@ -744,55 +693,7 @@ Compare distributions of observed beneath canopy air temperatures with:
 (i) modelled beneath canopy air temperatures
 (ii) weather data temperatures
 
-Important to realise that mmodelled temperatures use parameters derived from observations eg LAI/PAI
-
-### Individual trees comparison - scatter plots
-
-```{r,compare_model_obs_canopy_temps}
-# Need to compare only for periods of time when observed data available
-ids<-c()
-tmodss<-c()
-twtrss<-c()
-for(s in c("A1", "A2", "B1", "B2", "C1", "C2", "W1" ,"W2")){
-  trees<-trees_sf[which(trees_sf$subsite==s),]
-  for(t in 1:nrow(trees)){
-    id<-trees$id[t]
-    microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
-    weather<-microclim$weather
-    weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[nrow(microclim$microclim)]),]    
-    
-    obsdata<-loggers_df[which(loggers_df$id==id & !is.na(loggers_df$air_temp)),]
-    obsdata<-obsdata[which(obsdata$datetime %in% microclim$microclim$obs_time),]
-    
-    sel<-which(microclim$microclim$obs_time %in% obsdata$datetime)
-    tobs<-obsdata$air_temp
-    tmod<-microclim$microclim$tair[sel]
-    twtr<-weather$temp[sel]
-    length(tmod)==length(tobs)
-    
-    # Calculate ssqrs
-    tmss<-round(1-sum(abs(tmod-tobs)^2)/sum(abs(tobs-mean(tobs))^2),3)
-    twss<-round(1-sum(abs(twtr-tobs)^2)/sum(abs(tobs-mean(tobs))^2),3)
-    tmodss<-append(tmodss,tmss)
-    twtrss<-append(twtrss,twss)
-    ids<-append(ids,id)
-
-    # Pot modelled and observed temperatures with weather and observed temperatures
-    par(mfrow=c(1,2))
-    plot(tmod~tobs,cex=0.1,main=paste(id,'Tmodel R=',tmss))
-    abline(a=0, b=1,col='red')
-    plot(twtr~tobs,cex=0.1,main=paste(id,'Tweather R=',twss))
-    abline(a=0, b=1,col='red')
-  }
-}
-treerss<-data.frame('id'=ids,'Rtwtr'=twtrss,'Rtmod'=tmodss)  
-  
-# Compare distributions - needs better colour scheme
-#srce<-c(rep('model',length(tmod)),rep('obs',length(tobs)),rep('wtr',length(twtr)))
-#plotdata<-data.frame("air_temp"=c(tmod,tobs,twtr),"srce"=srce)
-#ggplot(plotdata, aes(x=air_temp, fill=srce)) + 
-#  geom_histogram(alpha=0.2, position="identity")
-```
+Important to realise that modelled temperatures use parameters derived from observations eg LAI/PAI
 
 ### By species & site
 Weather 0.72 to 0.9
@@ -841,6 +742,59 @@ for(site in c('AH','BE','CW','WH')){
 stespprss<-data.frame('id'=ids,'Rtwtr'=twtrss,'Rtmod'=tmodss)  
 stespprss
 ```
+### By tree max PAI (group spp?)
+Three groups max PAI <2, >3 between 2 and 3 
+```{r wtr_model_air_temp_sitespp}
+ids<-c()
+tmodss<-c()
+twtrss<-c()
+layout(matrix(c(1,2,3,4,5,6,7,8,9,10,11,12), 3, 4, byrow = TRUE) )#,widths=c(1,1,1,1), heights=c(1,1,1,1))
+par(mar = c(2, 0.5, 1.5, 0.5)) # c(bottom, left, top, right)
+trees_sf$pai_group<-NA
+trees_sf$pai_group[which(trees_sf$maxlai<2)]<-1 
+trees_sf$pai_group[which(trees_sf$maxlai<3 & trees_sf$maxlai>=2)]<-2 
+trees_sf$pai_group[which(trees_sf$maxlai>=3)]<-3
+  
+for(pai_group in c(1,2,3)){
+  for(spp in c('nsp','oak')){
+    trees<-trees_sf[which(trees_sf$Tree_species==spp & trees_sf$pai_group==pai_group),]
+    tobs<-c(); tmod<-c(); twtr<-c()
+    for(t in 1:nrow(trees)){
+      id<-trees$id[t]
+      microclim<-readRDS(file.path(dir_microclim,paste0(id,'_micropoint_',yr,'.rds')))
+      weather<-weather<-microclim$weather
+      weather<-weather[which(weather$obs_time>=microclim$microclim$obs_time[1] & weather$obs_time<=microclim$microclim$obs_time[nrow(microclim$microclim)]),]    
+
+      obsdata<-loggers_df[which(loggers_df$id==id & !is.na(loggers_df$air_temp)),]
+      obsdata<-obsdata[which(obsdata$datetime %in% microclim$microclim$obs_time),]
+    
+      sel<-which(microclim$microclim$obs_time %in% obsdata$datetime)
+      tobs<-append(tobs,obsdata$air_temp)
+      tmod<-append(tmod,microclim$microclim$tair[sel])
+      twtr<-append(twtr,weather$temp[sel])
+    }
+
+    # Calculate RSS 
+    tmss<-1-sum(abs(tmod-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+    twss<-1-sum(abs(twtr-tobs)^2)/sum(abs(tobs-mean(tobs))^2)
+    tmodss<-append(tmodss,tmss)
+    twtrss<-append(twtrss,twss)
+    ids<-append(ids,paste0(pai_group,'_',spp))
+
+    # Pot modelled and observed temperatures with weather and observed temperatures
+    plot(tmod~tobs,cex=0.1,main=paste('Tmodel ',round(tmss,2)),cex.main=1.5, yaxt='n',ylab="")
+    abline(a=0, b=1,col='red',lwd=1.5)
+    plot(twtr~tobs,cex=0.1,main=paste('Tweather ',round(twss,2)),cex.main=1.5, yaxt='n',ylab="")
+    abline(a=0, b=1,col='red',lwd=1.5)
+    
+  }
+}
+
+stespprss<-data.frame('id'=ids,'Rtwtr'=twtrss,'Rtmod'=tmodss)  
+stespprss
+```
+
+
 ### All trees
 
 ```{r wtr_model_air_temp_all}
@@ -875,6 +829,8 @@ abline(a=0, b=1,col='red',lwd=1.5)
 ```
 
 
+
+
 # Tree trunk temperature observations & modelling
 
 ## Tree trunk observations - temperature differences
@@ -907,7 +863,7 @@ for(site in c('AH','BE','CW','WH')){
     lat<-st_coordinates(tree)[2]
     ### Get trunk parameters for spp/tree  
     # Set radius from individual tree  - AH seem to have recorded circumf as radius
-    trunkp<-trunk_parameters(spp_params,spp,tradius,outerlayers) 
+    trunkp<-trunk_parameters(spp_params,spp,tree$Radius,outerlayers) 
     # Correct cph units to J/kg/K
     trunkp$cs<-trunkp$cs*1000 # CHECK this!!!!!!!!!!!!!!!!!!!!!
     
@@ -936,7 +892,7 @@ for(site in c('AH','BE','CW','WH')){
 
     
     #tme<-get_datetime(microclimsp$year,microclimsp$month,microclimsp$day,microclimsp$hour)
-    results_df<-data.frame("id"=id, "datetime"= microclim$microclim$obs_time,
+    results_df<-data.frame("id"=id, "datetime"= microclim$microclim$obs_time, weather_temp=microclim$weather$temp,
                            "air_temp"=round(microclim$microclim$tair,3),
                       "s_outer_temp"=round(tso,3), "n_outer_temp"=round(tno,3),
                       "s_inner_temp"=round(tsi,3), "n_inner_temp"=round(tni,3) )
@@ -1001,8 +957,17 @@ Lower heat cap in model - more responsive to temp
 Try setting inner to layer 2 in model?
 Dif conductivity between segs than layers (more readily transmitted across lyrs?)
 
+
+AH-NSP - similar PAI. outer >inner, occas s inner> n outer
+AH-Oak - some very large diff between model and observed eg Oak-1. Oak 4 example of evolution in trunk buffering with PAI development? Some examples where N-facing aspect temps > S-facing 
+BE-NSP - HIgh PAI buffered trunk T - be- 3 and 4 examples of elevated Obs outer trunk T also reflected partly in model because of low PAI
+BE-Oak - Often Observed trunk S-facing Temps> air T in May-June (late phenology and high wind?) Model-Obs similar levels of buffering although nighttime observed show slightly more buffering
+CW NSP - Both obs and model showed higher nightime buffering (6-7C) than daytime buffering - but higher for observed partic low PAI trees
+CW Oak - Some elevated Observed N-facing logger temps esp oak-1. Oak 3 ex of low PAI and high observed S-facing outer trnk temps
+WH Oak - All PAI>2 examples where N-facing > S facing. All show similar levels of buffering and comparable model and observed temperatures. Seasonal evolution in buffering evidemt but Mar lost.
+WH NSP - observed often show MUCH LESS buffering of T compared to model predictions eg S-facing > Air T. Some N-facing > S facing
+
 ```{r model_obs_cf}
-allresults_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
 
 make_cffig<-function(plotdata,title){
   tseries<- xts(x = plotdata, order.by = plotdata$datetime)
@@ -1017,11 +982,15 @@ make_cffig<-function(plotdata,title){
     dyLegend(width=600)
 }
 
-ids<-c('ah_nsp_1','ah_nsp_2','ah_nsp_3','ah_nsp_4')
-#ids<-c('ah_oak_1','ah_oak_2','ah_oak_3','ah_oak_4','ah_oak_5')
-#ids<-c('wh_oak_1','wh_oak_2','wh_oak_3','wh_oak_4','wh_oak_5')
+# ids<-c('ah_nsp_1','ah_nsp_2','ah_nsp_3','ah_nsp_4')
+# ids<-c('ah_oak_1','ah_oak_2','ah_oak_3','ah_oak_4','ah_oak_5')
+#  ids<-c('be_nsp_1','be_nsp_2','be_nsp_3','be_nsp_4','be_nsp_5','be_nsp_6')
+  ids<-c('be_oak_1','be_oak_2','be_oak_3')
+# ids<-c('wh_oak_1','wh_oak_2','wh_oak_3','wh_oak_4','wh_oak_5')
+#  ids<-c('wh_nsp_1','wh_nsp_2','wh_nsp_3','wh_nsp_4')
+
 # ids<-c('cw_nsp_1','cw_nsp_2','cw_nsp_3','cw_nsp_4','cw_nsp_5','cw_nsp_6')
-#ids<-c('cw_oak_1','cw_oak_2','cw_oak_3')
+# ids<-c('cw_oak_1','cw_oak_2','cw_oak_3')
 
 yr<-2024
 figs<-list()
@@ -1044,7 +1013,7 @@ for(id in ids){
   figs[[paste0(id,'_mod')]]<-make_cffig(figdata, title=paste0(id,'_mod_',maxlai))
     
   # Observed data - only that included in model data
-  figdata<-allresults_df[which(allresults_df$id ==id & allresults_df$datetime %in% tme),
+  figdata<-loggers_df[which(allresults_df$id ==id & loggers_df$datetime %in% tme),
                   c("datetime", "air_temp","n_outer_temp", "n_inner_temp", "s_outer_temp", "s_inner_temp")]
   figs[[paste0(id,'_obs')]]<-make_cffig(figdata, title=paste0(id,'_obs'))
 }
@@ -1055,6 +1024,47 @@ htmltools::tagList(figs)
 
 
 ## Some useful statistics for comparison
+
+### Phase shift and temperature anomalies - observed/modelled
+
+```{r compare_anomalies}
+# Load data and add solar zenith to determine day/night etc
+obsresults_df<-readRDS(file.path(dir_loggers,'logger_results_stedit.Rds'))
+allids<-unique(obsresults_df$id[which(obsresults_df$site!="kg")])
+
+# Load all model results
+infiles<-file.path(dir_microclim,paste0(allids,'_em_trunktemps_',2024,'.rds'))
+file.exists(infiles)
+for(f in infiles){
+  if(f==infiles[1]) modresults_df<-readRDS(f) else modresults_df<- rbind(modresults_df,readRDS(f))
+}
+
+# Add solar zewnith
+obsresults_df<-add_solar_zenith(obsresults_df,trees_sf)
+modresults_df<-add_solar_zenith(modresults_df,trees_sf)
+
+## Phase shift in max temperatures (daytime)
+# Observed
+calculate_phase_shift(obsresults_df[which(obsresults_df$szenith<=90),],1200,0,24)
+# Model
+calculate_phase_shift(modresults_df[which(modresults_df$szenith<=90),],1500,0,24 )
+
+# Anomalies in max temperature
+# Observed
+calculate_anomalies(obsresults_df,2000,stat="max",0,24)
+# Model
+calculate_anomalies(modresults_df,3000,stat="max",0,24)
+
+# Anomalies in min temperature
+# Observed
+calculate_anomalies(obsresults_df,2000,stat="min",0,24)
+# Model
+calculate_anomalies(modresults_df,3000,stat="min",0,24)
+
+```
+
+
+
 
 ### Create summary comparing model and observed by tree
 Compare by:  min, max, mean, std  of diurnal range, min, max, mean, for each location

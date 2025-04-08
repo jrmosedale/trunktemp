@@ -458,4 +458,26 @@ for(t in unique(laiwide_df$treeid)){
 
 
 
+### Plot model curves for all field study trees
+Predicted LAI development from fitting models to observed LAI derived from canopy photos.
 
+```{r lai_data}
+
+# Plot example LAI curves for AH
+par(mfrow=c(2,2))
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE), widths = lcm(5), heights =lcm(5))
+for(site in c('AH','BE','CW','WH')){
+  trees<-trees_sf[which(trees_sf$Site==site),]
+  for(t in 1:nrow(trees)){
+    laimod<-lai_models[[trees$id[t]]]
+    #tme<-unique(obs_df$datetime)
+    tme<-unique(loggers_df$datetime)
+    doy_seq<-unique(as.numeric(strftime(as.POSIXct(tme), format = "%j")))
+    lai_seq<-predict(laimod, data.frame(date=doy_seq))
+    plotdata<-data.frame("doy"=doy_seq,"lai"=lai_seq)
+    if (trees$Tree_species[t]=='nsp') col<-'green'
+    if (trees$Tree_species[t]=='oak') col<-'purple'
+    if(t==1) print(plot(plotdata$doy, plotdata$lai,col=col,type='l',ylab="Model LAI", ylim=c(0,5),xlab = "Day of Year")) else lines(plotdata$doy, plotdata$lai,col=col) 
+  }
+}
+```

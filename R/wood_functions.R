@@ -40,7 +40,7 @@ trunk_parameters<-function(spp_params,sp,tradius, outerlayers=c(0.015,0.02,0.03,
   thick<-sqrt(c(5:8))
   thick <- (thick/ sum(thick)) * (tradius-sum(outerlayers))
   layer_widths<-c(outerlayers,thick) # sum to tradius
-  if(round(sum(layer_widths),2)!=round(tradius,2)) stop("Layer widths do NOT sum to tree radius!!!")
+  if( abs(sum(layer_widths)-tradius) > 1e-5) stop("Layer widths do NOT sum to tree radius!!!")
 
   if(sp=='nsp'){
     cs <- c(bkcph,swcph,swcph,rep(hwcph,(nlyr-3)))

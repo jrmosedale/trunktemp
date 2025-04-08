@@ -26,6 +26,7 @@ create_overlapping_tiles<-function(template.r,overlap=5000,sz=75000){
       } else etype<-c(etype,'n')
     }
   }
+
   #length(which(etype=='y'))
   #missing_list<-list()
   #for(e in elist[which(etype=='n')]){

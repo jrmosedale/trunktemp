@@ -178,7 +178,6 @@ panel(out.r[[c(2,5,8,11,14,1,4,7,10,13,3,6,9,12,15)]],nc=5,nr=3,axes=FALSE,
 
 
 
-
 ################### ###################I typog ###################  ###################
 r12s0<-rast(file.path(dir_ips,"ip_tt_nsp_s0_2012.tif"))
 r12s1<-rast(file.path(dir_ips,"ip_tt_nsp_s1_2012.tif"))
@@ -204,6 +203,14 @@ v<-"ips_g2_adult_doy"
 v<-"ips_g3_lay_doy"
 v<-"ips_g3_adult_doy"
 v<-"generations_complete"
+
+### One off of G2 completion day for S0 2018
+v<-"ips_g2_adult_doy"
+plot(r18s0[[v]],plg=list(title.cex=2,size=1),fun=function()lines(lsea.v),
+     type="continuous", col=rev(map.pal("viridis",100)),
+     axes=FALSE,main=names(r))
+
+
 
 ### Test plot of extremes
 r<-c(r18s0[[v]],r12s0[[v]],r18s5[[v]],r12s5[[v]])
@@ -283,7 +290,85 @@ plot(r[[4]], col=c( "#440154","#21908C", "#FDE725" ), range=c(rg[1],rg[2]), axes
 
 
 
-################### ###################I typog ###################  ###################
+
+################### ################### Aggrillus ###################  ###################
+r12s0<-rast(file.path(dir_ag,"ag_tt_oak_s0_2012.tif"))
+r12s1<-rast(file.path(dir_ag,"ag_tt_oak_s1_2012.tif"))
+r12s4<-rast(file.path(dir_ag,"ag_tt_oak_s4_2012.tif"))
+r18s0<-rast(file.path(dir_ag,"ag_tt_oak_s0_2018.tif"))
+r18s1<-rast(file.path(dir_ag,"ag_tt_oak_s1_2018.tif"))
+r18s4<-rast(file.path(dir_ag,"ag_tt_oak_s4_2018.tif"))
+
+r18s2<-rast(file.path(dir_ag,"ag_tt_oak_s2_2018.tif"))
+r18s3<-rast(file.path(dir_ag,"ag_tt_oak_s3_2018.tif"))
+
+r12s2<-rast(file.path(dir_ag,"ag_tt_oak_s2_2012.tif"))
+r12s3<-rast(file.path(dir_ag,"ag_tt_oak_s3_2012.tif"))
+names(r18s4)
+
+v<-"stages_complete"
+v<-"larval_development"
+
+plot(r18s0[["stages_complete"]]); plot(r12s4[["stages_complete"]])
+plot(r18s0[["larval_development"]])
+plot(c(mask(r18s0[["larval_development"]],r18s0[["stages_complete"]],maskvalue=0),
+      mask(r12s0[["larval_development"]],r12s0[["stages_complete"]],maskvalue=0)))
+
+
+## Plot larval development as risk factor
+template_file<-'/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/jasmin/gb_1km.tif'
+lsea.r<-rast(template_file)
+lsea.r<-ifel(is.na(lsea.r),NA,0)
+lsea.v<-as.polygons(lsea.r)
+
+
+# ALL scenarios hottest year
+r<-c(r18s0[[v]],r18s1[[v]],r18s2[[v]],
+     r18s3[[v]],r18s4[[v]])
+r<-ifel(r==0,NA,r)
+names(r)<-c("S0 2018","S1 2018","S2 2018","S3 2018","S4 2018")
+panel(r, nc=5,nr=1,fun=function()lines(lsea.v), type="continuous", range=c(0,1),
+      plg=list(title.cex=2,size=2,x="right"),axes=FALSE,main=names(r))
+
+# coolest year
+r<-c(r12s0[[v]],r12s1[[v]],r12s2[[v]],
+     r12s3[[v]],r12s4[[v]])
+r<-ifel(r==0,NA,r)
+names(r)<-c("S0 2012","S1 2012","S2 2012","S3 2012","S4 2012")
+panel(r, nc=5,nr=1,fun=function()lines(lsea.v), type="continuous", range=c(0,1),
+      plg=list(title.cex=2,size=2,x="right"),axes=FALSE,main=names(r))
+
+## Plot average development over all years  - extreme years and scenarios
+outlist<-list()
+for(s in c(0,1,2,3,4)){
+  rlist<-list()
+  for(y in c(2011:2020)){
+    rin<-rast(file.path(dir_ag,paste0("ag_tt_oak_s",s,"_",y,".tif")))[["larval_development"]]
+    rin<-ifel(rin==0,NA,rin)
+    rlist<-c(rlist,rin)
+  }
+  rmean<-mean(rast(rlist),na.rm=TRUE)
+  rmin<-min(rast(rlist),na.rm=TRUE)
+  rmax<-max(rast(rlist),na.rm=TRUE)
+  outlist<-c(outlist,c(rmin,rmean,rmax))
+  panel(c(rmin,rmean,rmax),nc=3,nr=1,fun=function()lines(lsea.v),axes=FALSE, #col = c("#440154","#FCA636",  "#F0F921"),
+         type="continuous", range=c(0,1),
+        main=paste("Scenario",s,c("min","mean","max")) )
+  #plg=list(labels=c("0 (Egg)","0.5","1.0 (Larva)","1.5","2.0 (Pupa)","2.5","3.0 (Adult)")) )
+}
+
+out.r<-rast(outlist)
+names(out.r)<-c()
+panel(out.r[[c(2,5,8,11,14,1,4,7,10,13,3,6,9,12,15)]],nc=5,nr=3,fun=function()lines(lsea.v),axes=FALSE,
+      type="continuous", range=c(0,1))
+
+
+
+plg=list(loc="topright",labels=c("0 (Egg)","0.5","1.0 (Larva)","1.5","2.0 (Pupa)","2.5","3.0 (Adult)")) )
+
+
+
+
 
 
 
@@ -366,6 +451,10 @@ plot(r[[1]], col=c("#440154","#21908C", "#FDE725" ), range=c(rg[1],rg[2]), axes=
 plot(r[[2]], col=c("#440154","#21908C", "#FDE725" ), range=c(rg[1],rg[2]), axes=FALSE,box=FALSE, legend=FALSE)
 plot(r[[3]], col=c("#440154","#21908C", "#FDE725" ), range=c(rg[1],rg[2]), axes=FALSE,box=FALSE, legend=FALSE)
 plot(r[[4]], col=c( "#440154","#21908C", "#FDE725" ), range=c(rg[1],rg[2]), axes=FALSE,box=FALSE, legend=FALSE)
+
+
+
+
 
 
 ############# all years to get average
