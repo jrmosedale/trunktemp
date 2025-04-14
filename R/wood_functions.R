@@ -1,11 +1,15 @@
-# Thermal conductivity cannot be reliably calculated at MC>25% therefore use 25% +?
-# Gb = basic spec gravity
-# Average moisture contents
-# Oak: heatwood 64, sapwood 78
-# Sitka spruce heartwood 41 sapwood 142
-# MCfs fibre sat point moisture content
 
-# Get trunk parameters from parameters table by species
+#' Calculate trunk parameters from species table for use with trunk emulator model
+#'
+#' @param spp_params = dataframe of parameters by species
+#' @param sp = species
+#' @param tradius = trunk radius
+#' @param outerlayers =  vector of the width of outerlayers
+#'
+#' @return
+#' @export
+#'
+#' @examples
 trunk_parameters<-function(spp_params,sp,tradius, outerlayers=c(0.015,0.02,0.03,0.035)){
   # Calculate thermal properties from moisture content etc
   sw_mc<-spp_params['sw_mc',sp]
@@ -66,88 +70,18 @@ trunk_parameters<-function(spp_params,sp,tradius, outerlayers=c(0.015,0.02,0.03,
   return(treeparams)
 }
 
-# References
-# Heiskanen et al 2012 Fig 2a ~ 0.5 LAI variation In coniferous stands, the standard deviation was 5–11% during the study period Finland
 
-################### Debbie's model ###################
-# Calculate budburst
-# Calculate sensecence
-# Calculate changing lai
-
-#weather <- createclimdf(era5data, 10, 10)
-#lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=51, MaxLAI=3,MinLAI=0.5, sprg_sigmoid=TRUE)
-# plot(lai)
-#tme[which(lai>MinLAI)[1]]
-#pklai<-tme[which(lai==MaxLAI)[1]]
-#tme[which(lai<MaxLAI & tme>pklai)[1]]
-#tme[which(lai==MinLAI & tme>pklai)[1]]
-#library(sigmoid)
-# Simple budburst and senescance model using daily dd
-get_lai<-function(T,tme,lat, MaxLAI=3, MinLAI=0.5,sprg_sigmoid=FALSE,fall_sigmoid=FALSE){
-  # 1 Calculate budburst (dd model)Fu model) using gdd from 1 Jan
-  Tb<- -5
-  ADDcrit<-591
-  bb_to_fullleaf<-85 # days between budburst and full leaf
-
-  dayTmax<-tapply(T,INDEX=yday(tme),FUN=max)
-  dayTmin<-tapply(T,INDEX=yday(tme),FUN=min)
-  dd<-cumsum(((dayTmax-dayTmin)/2)-Tb)
-  bb<-which(dd>ADDcrit)[1]
-
-  # 2 Calculate senecance using Delpierre model
-  # Parameters - Quercus
-  Pstart<-14 # 14.5 max day length at which senscence are effective DBF=1.5
-  Tb<-26.5 # 26.5 maximum temperature at which senescence processes are effective DBF=28.5
-  x<-2
-  y<-0 # DBF=2
-  Ycrit<-10178 #threshold for sum(Rsen) to reach DBF=8268
-
-  # Calculate rates of senescence
-  dayTmean<-tapply(T,INDEX=yday(tme),FUN=max)
-  jdays<-mesoclim:::.jday(as.POSIXlt(tme[c(seq(1,length(tme),24))]))
-  daylength<-mesoclim::daylength(jdays,lat)
-  doy<-c(1:length(daylength))
-  Rsen<-ifelse(doy>180 & daylength<Pstart & dayTmean<Tb , (Tb-dayTmean)^x * (1-(daylength/Pstart))^y, 0)
-  Ssen<-cumsum(Rsen)
-  # Get start and end days of senescence
-  Dstart<-which(Rsen>0)[1]
-  Y90<-which(Ssen>Ycrit)[1]
-
-  # Calculate increase/decrease in LAI -  linear or sigmoid?
-  lai<-rep(MinLAI,length(doy))
-  if(sprg_sigmoid==FALSE){
-    LAIinc<-as.numeric((MaxLAI-MinLAI)/(bb_to_fullleaf+1)) # assume increases over 85 days to max
-    for(n in bb:(Y90-1)) lai[n]<-ifelse(lai[n-1]<MaxLAI,min(MaxLAI,lai[n-1]+LAIinc),lai[n-1])
-  }
-  if(sprg_sigmoid==TRUE){
-    fullleaf<-bb+bb_to_fullleaf
-    x<-seq((bb-(bb+8)),(fullleaf-(fullleaf-8)),length=fullleaf-bb)
-    lai[bb:(fullleaf-1)]<-((MaxLAI-MinLAI)*sigmoid(x))+MinLAI
-    lai[fullleaf:(Dstart-1)]<-MaxLAI
-  }
-  if(fall_sigmoid==FALSE){
-    LAIdec<-as.numeric((MaxLAI-MinLAI)/(Y90-Dstart+1))
-    for(n in Dstart:length(lai)) lai[n]<-lai[n]<-ifelse(lai[n-1]>MinLAI,max(MinLAI,lai[n-1]-LAIdec),MinLAI)
-  }
-  if(fall_sigmoid==TRUE){
-    x<-seq((Dstart-(Dstart+8)),(Y90-(Y90-8)),length=Y90-Dstart+10)
-    lai[Dstart:(Y90-1+10)]<-rev(((MaxLAI-MinLAI)*sigmoid(x))+MinLAI)
-  }
-  # plot(lai)
-
-  # Convert back top hourly lai
-  lai_hrly<-rep(lai,each=24)
-  return(lai_hrly)
-}
-
-
-
-# Spec gravity 5g/cm3 density = ~ 5 spec g
-# p0=density of oven dry wood (320-720kg/m3)
-# Oak Gb0.6 green, 0.49 12%
-# Sitka spruce Gb 0.37 green, 0.4 12%
-# calc_thcond(Gb=0.6,x=25)
-# calc_thcond(Gb=0.37,x=25)
+#' Calculate thermal conductivity
+#'
+#' @param Gb = wood basic specific gravity (oven dry mass, green volume in g/cm3?)
+#' @param x = moisture content of wood in %
+#' @param MCfs = moisture content at fibre saturation as %
+#'
+#' @return
+#' @export
+#'
+#' @examples
+#' calc_thcond(Gb=0.6,x=25); calc_thcond(Gb=0.37,x=25)
 calc_thcond<-function(Gb,x=25,MCfs=30){
   if(x>25) warning("Calculation of thermal conductivity unreliable at moisture contents > 25%")
   A<-0.01864
@@ -161,13 +95,19 @@ calc_thcond<-function(Gb,x=25,MCfs=30){
   return(k)
 }
 
-# Calculate Specific heat capacity at different moisture contents using
-# The heat capacity of wood depends on the temperature and moisture content
-# of the wood but is practically independent of density or species. (Glass & Zelinka)
-# Output units:
-# x = Moisture content T = temp, cp0 if provide = spec heat cap of dry wood, fsat = moisture content at fibre saturation
-# for (n in seq(10,90,10)) print(paste(n,calc_sph(n)))
 
+#' Calculate Specific heat capacity of wood at different moisture contents
+#' The heat capacity of wood depends on the temperature and moisture content
+#'  of the wood but is practically independent of density or species. (Glass & Zelinka)
+#' @param x = Moisture content of wood as %
+#' @param cp0 = spec heat cap of dry wood
+#' @param T = temperature
+#' @param fsat = moisture content at fibre saturation as %
+#'
+#' @return
+#' @export
+#'
+#' @examples
 calc_sph<-function(x,cp0=NA,T=283,fsat=30){
   if (is.na(cp0)) cp0<-0.1031+0.003867*T
   # Calculate correction factor Ac for <fibre sat moisture content
@@ -188,14 +128,18 @@ calc_sph<-function(x,cp0=NA,T=283,fsat=30){
   return(cpx)
 }
 
-# Return density of wood at given moisture content in kg/m3 units
-# rhow in cm/g3 =1
-# Gb wood basic specific gravity (oven dry mass, green volume in g/cm3?)
-# fs = moisture content at fibre sat (%)
+#' Calculate wood density
+#'
+#' @param Gb = wood basic specific gravity (oven dry mass, green volume in g/cm3?)
+#' @param x = = Moisture content of wood as %
+#' @param MCfs = moisture content at fibre sat (%)
+#' @param rhow in cm/g3 =1
+#'
+#' @returns density of wood at given moisture content in kg/m3 units
+#' @export
 calc_density<-function(Gb,x,MCfs=30, rhow=1){
   Gx<-Gb/(1-0.265*Gb*(1-x/MCfs))
   rho<-rhow*Gx*(1+x/100)
   return(rho*1000)
 }
-# calc_density(Gb,x=90)
 

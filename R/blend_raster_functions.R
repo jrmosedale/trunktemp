@@ -1,9 +1,14 @@
-#### Function to create overlapping tileset
-# Return tile extens as list and also a y/n character vector of whether tile includes non NA
-# template.r = land mask to inform whether land present
-#tileset<-create_overlapping_tiles(gb)
-#elist<-tileset$tile_extents
-#etype<-tileset$tile_land
+#' Create overlapping tile set covering Great Britain
+#'
+#' @param template.r = 1km land mask spatraster to inform whether land present
+#' @param overlap = overlap in metres of each tile (x & y)
+#' @param sz = base size of tiles in metres - some output tiles may be smaller
+#'
+#' @returns named list where "tile_extents" holds the terra extent of each tile and
+#' "tile_land" is BOOLEAN of whether land cells within tile (based on template.r)
+#' @export
+#'
+#' @examples
 create_overlapping_tiles<-function(template.r,overlap=5000,sz=75000){
   xmax<-ext(template.r)[2]
   xmin<-ext(template.r)[1]
@@ -26,27 +31,20 @@ create_overlapping_tiles<-function(template.r,overlap=5000,sz=75000){
       } else etype<-c(etype,'n')
     }
   }
-
-  #length(which(etype=='y'))
-  #missing_list<-list()
-  #for(e in elist[which(etype=='n')]){
-  #  missing_list<-c(missing_list,crop(template.r,e))
-  #}
   tileset<-list("tile_extents"=elist,"tile_land"=etype)
   return(tileset)
 }
 
 
-### FUNCTIONS from: https://github.com/ilyamaclean/microclimf/tree/main
 #' @title Mosaics a list of overlapping SpatRasters blending overlap areas
 #' @description Mosaics a list of overlapping SpatRasters blending
 #' the areas of overlap using a distance weighting to eliminate tiling effects
 #' @param rlist a list of SpatRasters
 #' @details
-#' If rlist contains SpatRasters that are not
-#' overlapping the conventional terra::moasic function is used.
-#' If rlist contains SpatRasters that do overlap, they should comprise
-#' a list of adjacent rasters in a single row or column.
+#' If rlist contains SpatRasters that are not overlapping the conventional terra::moasic function is used.
+#' If rlist contains SpatRasters that do overlap, they should comprise a list of adjacent rasters in a single row or column.
+#' Overlapping cells calulated using weighted distances to reduce tile effects
+#' Function derived from: https://github.com/ilyamaclean/microclimf/tree/main
 #' @import terra
 #' @export
 mosaicblend <- function(rlist) {
@@ -160,8 +158,17 @@ mosaicblend <- function(rlist) {
   crs(r)<-crs(tem)
   r
 }
-#year_range<-modelruns[6]
 
+#' Merges overlapping tiles using mean values for overlaps
+#' Results may show tile effects in merged output
+#' @param dir_in - directory of Asian longhorn model run outputs
+#' @param scenario_name - string of scenario name used in filenames eg "s0"
+#' @param year_range - string holding year range used in filenames eg "2011-2016
+#' @param template_file - template of merged spatraster output
+#'
+#' @return
+#'
+#' @noRd
 merge_all_tiles<-function(dir_in,scenario_name,year_range,template_file){
   gb1km<-rast(template_file)
   gb<-trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))
@@ -185,14 +192,16 @@ merge_all_tiles<-function(dir_in,scenario_name,year_range,template_file){
   return(ukresults.r)
 }
 
-#tile_filelist<-file.path(dir_in,paste0("alh_",scenario_name,"_1kmrisks_t",landtiles,"_5yr_",year_range,".tif"))
-#if(!all(file.exists(tile_filelist))) stop(paste("Missing input tile files:",tile_filelist[which(!file.exists(tile_filelist))]))
-#rlist<-sprc(tile_filelist)
-#uknoblend.r<-merge(rlist)
-#plot(uknoblend.r)
 
-
-### Wrapper to blend all lad tile files in dir and add allsea tiles
+#' Wrapper to blend all land tile files in dir and add allsea tiles
+#'
+#' @param dir_in
+#' @param template_file
+#' @param scenario_name
+#' @param year_range
+#'
+#' @return
+#' @noRd
 blend_all_tiles<-function(dir_in,template_file,scenario_name="syc_s0",year_range="2011_2015"){
   gb1km<-rast(template_file)
   gb<-trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))

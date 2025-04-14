@@ -1,11 +1,14 @@
 ########################################################################
 ### General functions
 ########################################################################
-# calculate day of year from hourly (daily min/max calculated) temperature data using a base temp and threshold
-# temps - hourly vector of temperatures
-# base_temp - the temperature from which accumulated degrees should be calculated
-# acc_gdd - the threshold of growing degree days at which indicator is reached
-# offset = number of hours from start to skip
+#' @title Calculates degree day accumulation from hourly or daily timeseries
+#' @param r temps - vector of temperatures of same length as tme
+#' @param r tme - datetime vector to match temps
+#' @param r Tbase - Temperature base used in caluclating degree days
+#' @param r acc_gdd - target accumulated degree days to be reached - see returns
+#' @param r offset - will skip this number of values from start of temp vector if >0
+#' @returns - either max accumulated DD attained OR if acc_gdd !=NA day of year on which acc_gdd is reached
+#' @noRd
 gdd_micro <- function(temps, tme, Tbase, acc_gdd=NA, offset = 0) {
   out<-NA
   if(!all(is.na(temps))){
@@ -28,18 +31,36 @@ gdd_micro <- function(temps, tme, Tbase, acc_gdd=NA, offset = 0) {
   return(out)
 }
 
+#' @title Convers results matrix to spatraster
+#' @param results - matrix of results as produced by mapply of run pest model function
+#' @param r template_r - template of spatraster
+#' @returns - spatraster of results
+#' @noRd
+get_results_rast<-function(results,template_r){
+  template_r<-ifel(is.na(template_r),NA,0)
+  template_r<-rep(template_r,dim(results)[1])
+  names(template_r)<-rownames(results)
+  results_r<-setValues(template_r,t(results))
+  return(results_r)
+}
+
 ########################################################################
 ### Asian longhorn GDD model - inner and outer barklocations
 # No variation in DD requirements
 # Sets a max length of generation = 4 yrs - does not continue beyond this point
-# Just follows the first cohort of eggs laid - not G2, G3 etc
-# Outputs proportion of beetles with different generation times in years: 1,2,3,4,>4
+# Just follows the first cohort of eggs laid - not filial or sister broods
+# Outputs proportion of beetles completing lifecycle and when cycle completed (days after oviposition)
 # Vary number of instars based on parameterization molt value data
 # Min L instars = 6 (stages 1-7 +3), Max L instar =11 (stages 1-12 +3)
 # therfore 6 different life cycle groups based on number of instars
 # UCT and LCT = absolute limits to development
 ########################################################################
-# Convert Degree hr data to Degree Day
+#' Convert Degree hr data to Degree Day
+#' @param dhr- degree hours vector to match tme
+#' @param tme - hourly datetime vector
+#'
+#' @return a list of two vectors dd=daily summed dhr, doy= day of year
+#' @noRd
 dhr_to_dd<-function(dhr,tme){
   if(length(dhr)%%24!=0) stop("Length of data in dhr_to_dd NOT multiple of 24!!!")
   if(hour(tme[1])!=0 || hour(tme[length(tme)])!=23) warning("Check datetime data in dhr_to_dd - may not be whole timeseries of days!!!")
@@ -49,17 +70,32 @@ dhr_to_dd<-function(dhr,tme){
   return(list(dd=dd,doy=doy))
 }
 
-# Calculate pupahold time from 5 day running mean - use outer temp as pupates in nner cambium - return Day of Year
-get_pupagate<-function(Tout,tme,pupahold=14){
+#' Calculate day of year after which final instar does not become pupa
+#' Calculates on basis of rolling 5 day max daily temperatures
+#' @param Tout - vector of inner bark temperatures matching tme
+#' @param tme - hourly datetime vector
+#' @param pupahold - days after peak summer temperature
+#' @param min_gate - minimum value of pupa gate (dfay of year) default to 19 July/ doy=200
+#' @returns integer of pupal gate Day of Year
+#' @noRd
+get_pupagate<-function(Tout,tme,pupahold=14,min_gate=200){
   doys<-yday(tme)
   dayTmax<-tapply(Tout,INDEX=doys,FUN=max)
   roll5mean<-as.numeric(zoo::rollmean(dayTmax,5,align = 'right', na.pad = TRUE))
   pktempday<-which(roll5mean==max(roll5mean,na.rm=TRUE))
-  pupagate<-max(pktempday,200) # sets to 19 July if peak temperature before this??
+  pupagate<-max(pktempday,min_gate)
   pupagate<-pupagate + pupahold
   return(pupagate)
 }
-# Calculate dd for a specific stage - returns daily vector of values matching tme
+
+#' Calculate degree days for a specific stage of Asian Longhorn beetle
+#' @param s - stage number integer
+#' @param parameters
+#' @param Tout - vector of outer trunk temperatures
+#' @param Tinr - vector of inner trunk temperatures
+#' @param tme - hourly vector of datetime
+#' @returns daily vector of degree hrs values matching tme input
+#' @noRd
 calc_stage_dd<-function(s,parameters,Tout,Tinr,tme){
   tstep<-as.numeric(tme[2])-as.numeric(tme[1])
   daysecs<-24*60*60
@@ -78,16 +114,32 @@ calc_stage_dd<-function(s,parameters,Tout,Tinr,tme){
   return(dd)
 }
 
-# FUNCTION to calculate development rate
+#' Calculates deveopmental rate for a timestep
+#' @param LCT - lower critical temperature
+#' @param UCT - upper critical temperature
+#' @param tmerate - timstep as proportion of a day
+#'
+#' @return
+#' @noRd
 calc_rT<-function(T,LCT,UCT,tmerate){
   # Calculate dev rate
   rT<-ifelse(T<UCT & T>LCT, (T-LCT) * tmerate, 0)
-  # Accumulative dev rate and completion day
-  # gdd<-cumsum(rT)
   return(rT)
 }
 
-# Model group development over a year
+#' Model Asian longhorn beetle development over a single year
+#' @param gstage - current stage
+#' @param gdd - any existing dd accumulated for current stage
+#' @param mstage - mouting stage
+#' @param parameters
+#' @param dd_matrix - matrix of accumulated degree days for every day and every developmental stage for current year
+#' @param pgate - pupa gate value (day of year)
+#'
+#' @return list of values at the end of the year where
+#'  gstage=developmental stage at year end,gdd=accumulated dd for stage at end of year,
+#'  complete_v=vector integers of stages completed,
+#'   stgend_v=vector of integers of day of year on which stages completed)
+#' @noRd
 year_development<-function(gstage,gdd,mstage,parameters,dd_matrix,pgate){
   # Continue until no more development in the year
   stgend_v<-c()
@@ -138,6 +190,22 @@ year_development<-function(gstage,gdd,mstage,parameters,dd_matrix,pgate){
 } # end function
 
 
+#' Runs multi year Asian Longhorn Beetle development model for a given location
+#'
+#' @param Tout_list - list of hourly vectors of outer trunk temperatures for each year
+#' @param Tinr_list - list of hourly vectors of iner trunk temperatures for each year
+#' @param tme_list - list of hourly datetime vectors for each year
+#' @param parameter_file - location of model parameter file
+#' @param numgrps - number of developmental groups defined by number of instars that can mouly to pupa = 6
+#' @param use_pgate - TRUE - imposes pupagate to prevent development to pupa late in season
+#'
+#' @return   named vector of vectors where:
+#' pop_completed = proportion of starting cohort completing life cycle by run end
+#' days_to_complete = vector of days (from oviposition) for each developmental group to complete life cycle
+#' days_to_pupa = vector of days (from oviposition) for each developmental group to reach pupal stage
+#' @export
+#'
+#' @examples
 run_alh<-function(Tout_list,Tinr_list,tme_list,parameter_file,numgrps=6,use_pgate=TRUE){
   # Checks first year of Tout_list - if all NA then skips calculations
   if(!all(is.na(Tout_list[[1]]))){
@@ -204,9 +272,6 @@ run_alh<-function(Tout_list,Tinr_list,tme_list,parameter_file,numgrps=6,use_pgat
       } # for group
     } # end year
 
-
-    #print(stageend_m)
-
     # Vector of outputs for later conversion to raster
     if(all(is.na(stageend_m[15,]))) grps_completed<-0 else grps_completed<-length(which(!is.na(stageend_m[15,])))
     if(grps_completed==0) pop_completed<-0 else pop_completed<-max(parameters$moult[grp_moultstg][grps_completed])
@@ -231,9 +296,25 @@ run_alh<-function(Tout_list,Tinr_list,tme_list,parameter_file,numgrps=6,use_pgat
 
 ########################################################################
 ### Ips typographus non-linear egg to pupae model - outer bark
-# see IpsTypographus_test.R
 ########################################################################
-library(mesoclim)
+#' Run Ips typographus single year model for a location
+#'
+#' @param Tair - vector of hourly temperature data for year
+#' @param lat - latittude of location
+#' @param tme - datetime vector of same length as Tair
+#'
+#' @return  named vector where:
+#'    "ips_emerge_doy" - day of year of G0 adult emergence
+#'    "ips_lay_doy" - day of year of G1 eggs laid
+#'    "ips_adult_doy" - day of year of G1 completing life cycle
+#'    "ips_g2_lay_doy" - day of year of G2 eggs laid
+#'    "ips_g2_adult_doy" - day of year of G2 completing life cycle
+#'    "ips_g3_lay_doy" - day of year of G3 eggs laid
+#'    "ips_g3_adult_doy" - day of year of G3 completing life cycle
+#'    "generations_complete" - number of generations completing full life cycle
+#' @export
+#'
+#' @examples
 run_ips<-function(T,Tair, lat, tme){
   # Set up
   emerge<-NA
@@ -354,25 +435,29 @@ run_ips<-function(T,Tair, lat, tme){
 
 ########################################################################
 ### Dendroctonus micans
-# Host spruce - outer bark usually low down tree bole often on north sides
 # Generations: uni or semivoltine, with typical generation times of UK: 10-18 months; Europe: 1-3 years
-# Model approach: multi-year model to estimate voltinism and time for a single generation to develop using linear degree day models
-# (Gent et al., 2017) with fitted lower temperature limits beginning with parental generation as overwintering pupa.
-
-# Tair measured from weather
-# Assume starting G overwinter as pupa
+# Model uses linear degree day models (Gent et al., 2017) with fitted lower temperature limits beginning with parental generation as overwintering pupa.
+# Assume starting G0 overwinter as pupa
 # Assume Tair thresholds must be met for adult emergence and laying
-# Impose diapause when Tback< threshold for 7 consec days (OR when L5 complete??)
-
-# Output
-# Completes L5
-# Complete Pupate (to adult)
-
+# Facultative diapause when Tback< threshold for 7 consec days
+# Thermal response shows linear decline between Topt and Tmax - following suggestion of Gent
 ########################################################################
-# Version where linear decline between Topt and Tmax - following suggestion of Gent
-# Option run yr by yr and simple record which stage completes / proportion of stage completed
-# OR run across multiple years - see run_dendrocutonus_multiyear
-# T<-values(treetemps1km)[10000,];Tair<-T; tme<-time(airtemps1km)
+#' Run Dendroctomus micans single year development model
+#' @param T - vector of trunk temperatures
+#' @param Tair - vector of air temperatures
+#' @param tme - date time vector same length as T, Tair
+#'
+#' @return namd vactor where:
+#' "dnd_lay_doy" - day of year of oviposition
+#' "dnd_hatch_doy" - day of year of G1 egg hatching
+#' "dnd_pupate_doy" - day of year of G1 pupation
+#' "dnd_adult_doy" - day of year of G1 adult eclosion
+#' "dnd_stages_complete" - number of stages completed (eggs hatched=1, pupation = 2, adult eclosion=3)
+#' "dnd_incomplete_stage" - propostion of overwintering stage development that is complete
+#' @export
+#'
+#' @examples
+#' results<-run_dendroctonus(T=values(treetemps1km)[10000,],Tair=values(treetemps1km)[10000,], tme<-time(airtemps1km))
 run_dendroctonus<-function(T,Tair,tme){
   # Setup and parameters
   lay<-NA
@@ -463,42 +548,32 @@ run_dendroctonus<-function(T,Tair,tme){
 
   return(output)
 }
-#results<-run_dendroctonus(T=values(treetemps1km)[10000,],Tair=values(treetemps1km)[10000,], tme<-time(airtemps1km))
 
-# Convert matrix to spatraster of results
-get_results_rast<-function(results,template_r){
-  template_r<-ifel(is.na(template_r),NA,0)
-  template_r<-rep(template_r,dim(results)[1])
-  names(template_r)<-rownames(results)
-  results_r<-setValues(template_r,t(results))
-  return(results_r)
-}
+
 
 ########################################################################
 ### Agrillus biguttatus - host = oak
-# Tobark = outer bark temperature
-# Tibark = inner bark temperatures
-# Tair = air temperatures
-# tme = datetime
 # Imposes diapuse at completion of L4 (pupate date)
-# Diapause also imposed based on Temp/Day of Year (may be prior to pupate date)
+# Diapause also imposed based on Temp/Day of Year (may be prior to pupation date)
 ########################################################################
-#Tob<-values(outtemps1km)
-#Tob<-asplit(Tob,1) # array of lists of timeseries
-#Tib<-values(inrtemps1km)+1
-#Tib<-asplit(Tib,1) # array of lists of timeseries
-#Ta<-values(airtemps1km)
-#Ta<-asplit(Ta,1)
-#tme<-time(airtemps1km)
-
-#agresults<-mapply(FUN=run_agrillus,Tobark=Tob,Tibark=Tib,Tair=Ta,MoreArgs=list(tme=tme)) # output as day of year
-#agresults.r<-get_results_rast(agresults,template_r=treetemps1km[[1]])
-#plot(agresults.r)
-#Tobark<-as.numeric(unlist(Tob[1000]))+3
-#Tibark<-as.numeric(unlist(Tib[1000]))
-#Tair<-as.numeric(unlist(Ta[1000]))+4
-#tme<-time(airtemps1km)
-
+#' Run Agrillus one year model
+#'
+#' @param Tobark = outer bark temperature
+#' @param Tibark = inner bark temperatures
+#' @param Tair = air temperatures
+#' @param tme = datetime
+#'
+#' @returns named vector where:
+#'   "eclosion_doy" - day of year of G0 adult eclosion
+#'   "lay_doy" - day of oviposition
+#'   "hatch_doy" - day of year of G1 hatching
+#'   "pupate_doy" - day of year of G1 pupation
+#'   "stages_complete" - number of stages completed (0, 1 (eggs hatched), 2 (pupation))
+#'   "larval_development" - proportion of total larval development (degree days) completed by end of model run
+#' @export
+#'
+#' @examples
+#' agresults<-mapply(FUN=run_agrillus,Tobark=Tob,Tibark=Tib,Tair=Ta,MoreArgs=list(tme=tme)) # output as day of year
 run_agrillus<-function(Tobark, Tibark, Tair, tme){
   # Setup and parameters
   eclosion<-NA

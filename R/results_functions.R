@@ -1,6 +1,11 @@
-#Adds solar zenith to timeseries database
-# df timeseries df with datetime as variable and idvar shared with sites_sf
-# sites_sf = id and lat lon data
+#' Adds solar zenith to timeseries database
+#'
+#' @param df - dataframe with datetime as variable and id variable shared with locs_sf
+#' @param locs_sf sf dataframe with valid geometry that shares id variable with df
+#'
+#' @return
+#' @export
+#'
 add_solar_zenith<-function(df,locs_sf){
   # Calc lon/lat of locations/trees
   lat<-st_coordinates(locs_sf)[,2]
@@ -15,7 +20,16 @@ add_solar_zenith<-function(df,locs_sf){
   return(df)
 }
 
-# Calculate phase shift in daytime max temperature
+#' Calculate phase shift in daytime max temperature
+#'
+#' @param hrlydata
+#' @param mxfrq
+#' @param minhr
+#' @param maxhr
+#'
+#' @return
+#'
+#' @noRd
 calculate_phase_shift<-function(hrlydata,mxfrq,minhr=6,maxhr=20 ){
   hrlydata$date<-as.Date(hrlydata$datetime)
   hrlydata$hour<-hour(hrlydata$datetime)
@@ -74,6 +88,15 @@ calculate_phase_shift<-function(hrlydata,mxfrq,minhr=6,maxhr=20 ){
   return(results_df)
 }
 
+#' Calculate temperature anomalies
+#' @param hrlydata
+#' @param mxfrq
+#' @param stat
+#' @param minhr
+#' @param maxhr
+#'
+#' @return
+#' @noRd
 calculate_anomalies<-function(hrlydata,mxfrq,stat="max",minhr=0,maxhr=24){
   hrlydata$date<-as.Date(hrlydata$datetime)
   hrlydata$hour<-hour(hrlydata$datetime)

@@ -1,41 +1,23 @@
-# Phenology models for application
-# Depend on temperature, day length (and water availabilityy - ignored)
-# sigmoidal calculation
-# where start pt x=0 b=(1/y)-1
-#b<-(1/MinLAI)-1
-# at end x<-100 and y>3
-#x<-100
-#y<-0.99
-#k<- -log( (1/y-1)/b) / x
-#x<-seq(0,100,1)
-#y<-1 / (1+(b*exp(-k*x)))
-
-# Thresholds / Variables
-# Max LAI (PAI - something?)
-# Day length 10.5hrs
-# Temperature 8-10C
-# Intitial LAI growth (linera or exponential?)
-# Spatial variation?
-
-# References
-# Heiskanen et al 2012 Fig 2a ~ 0.5 LAI variation In coniferous stands, the standard deviation was 5–11% during the study period Finland
-
-################### Debbie's model ###################
-# Calculate budburst
-# Calculate sensecence
-# Calculate changing lai
-
-#weather <- createclimdf(era5data, 10, 10)
-#lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=51, MaxLAI=3,MinLAI=0.5, sprg_sigmoid=TRUE)
-# plot(lai)
-#tme[which(lai>MinLAI)[1]]
-#pklai<-tme[which(lai==MaxLAI)[1]]
-#tme[which(lai<MaxLAI & tme>pklai)[1]]
-#tme[which(lai==MinLAI & tme>pklai)[1]]
-
-# Simple budburst and senescance model using daily dd
+#' Simple budburst and senescance model using daily dd
+#' Calculate change in PAI/LAI
+#' Depend on temperature & day length (this version ignores water availability as parameter)
+#' Canopy evolution in spring and fall described by either a sigmoid curve or linear line
+#' @param tme - time series
+#' @param lat - latitude of location
+#' @param MaxLAI - maximum LAI/PAI
+#' @param MinLAI - minimum LAI/PAI
+#' @param sprg_sigmoid - TRUE if sigmoid curve to be fitted to spring change (otherwise linear)
+#' @param fall_sigmoid - TRUE if sigmoid curve to be fitted to autumn change (otherwise linear)
+#'
+#' @return hourly timeseries of LAI/PAI values ranging between MinLAi and MAxLAI
+#' Only daily change is modelled so values within the same day are constant
+#' @import sigmoid
+#' @export
+#'
+#' @examples
+#' lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=51, MaxLAI=3,MinLAI=0.5, sprg_sigmoid=TRUE)
 get_lai<-function(T,tme,lat, MaxLAI=3, MinLAI=0.5,sprg_sigmoid=FALSE,fall_sigmoid=FALSE){
-  # 1 Calculate budburst (dd model)Fu model) using gdd from 1 Jan
+  # 1 Calculate budburst (dd model) Fu model) using gdd from 1 Jan
   Tb<- -5
   ADDcrit<-591
   bb_to_fullleaf<-85 # days between budburst and full leaf
