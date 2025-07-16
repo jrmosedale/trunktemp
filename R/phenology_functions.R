@@ -15,15 +15,15 @@
 #' @export
 #'
 #' @examples
-#' lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=51, MaxLAI=3,MinLAI=0.5, sprg_sigmoid=TRUE)
+#' #lai<-get_lai(T=weather$temp,tme=weather$obs_time,lat=51, MaxLAI=3,MinLAI=0.5, sprg_sigmoid=TRUE)
 get_lai<-function(T,tme,lat, MaxLAI=3, MinLAI=0.5,sprg_sigmoid=FALSE,fall_sigmoid=FALSE){
   # 1 Calculate budburst (dd model) Fu model) using gdd from 1 Jan
   Tb<- -5
   ADDcrit<-591
   bb_to_fullleaf<-85 # days between budburst and full leaf
 
-  dayTmax<-tapply(T,INDEX=yday(tme),FUN=max)
-  dayTmin<-tapply(T,INDEX=yday(tme),FUN=min)
+  dayTmax<-tapply(T,INDEX=lubridate::yday(tme),FUN=max)
+  dayTmin<-tapply(T,INDEX=lubridate::yday(tme),FUN=min)
   dd<-cumsum(((dayTmax-dayTmin)/2)-Tb)
   bb<-which(dd>ADDcrit)[1]
 
@@ -36,7 +36,7 @@ get_lai<-function(T,tme,lat, MaxLAI=3, MinLAI=0.5,sprg_sigmoid=FALSE,fall_sigmoi
   Ycrit<-10178 #threshold for sum(Rsen) to reach DBF=8268
 
   # Calculate rates of senescence
-  dayTmean<-tapply(T,INDEX=yday(tme),FUN=max)
+  dayTmean<-tapply(T,INDEX=lubridate::yday(tme),FUN=max)
   jdays<-mesoclim:::.jday(as.POSIXlt(tme[c(seq(1,length(tme),24))]))
   daylength<-mesoclim::daylength(jdays,lat)
   doy<-c(1:length(daylength))

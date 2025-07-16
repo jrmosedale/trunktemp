@@ -457,7 +457,7 @@ run_ips<-function(T,Tair, lat, tme){
 #' @export
 #'
 #' @examples
-#' results<-run_dendroctonus(T=values(treetemps1km)[10000,],Tair=values(treetemps1km)[10000,], tme<-time(airtemps1km))
+#' #results<-run_dendroctonus(T=values(treetemps1km)[10000,],Tair=values(treetemps1km)[10000,], tme<-time(airtemps1km))
 run_dendroctonus<-function(T,Tair,tme){
   # Setup and parameters
   lay<-NA
@@ -573,7 +573,7 @@ run_dendroctonus<-function(T,Tair,tme){
 #' @export
 #'
 #' @examples
-#' agresults<-mapply(FUN=run_agrillus,Tobark=Tob,Tibark=Tib,Tair=Ta,MoreArgs=list(tme=tme)) # output as day of year
+#' #agresults<-mapply(FUN=run_agrillus,Tobark=Tob,Tibark=Tib,Tair=Ta,MoreArgs=list(tme=tme)) # output as day of year
 run_agrillus<-function(Tobark, Tibark, Tair, tme){
   # Setup and parameters
   eclosion<-NA

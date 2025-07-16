@@ -7,26 +7,61 @@
 #' @returns named list where "tile_extents" holds the terra extent of each tile and
 #' "tile_land" is BOOLEAN of whether land cells within tile (based on template.r)
 #' @export
-#'
+#' @import terra
 #' @examples
-create_overlapping_tiles<-function(template.r,overlap=5000,sz=75000){
-  xmax<-ext(template.r)[2]
-  xmin<-ext(template.r)[1]
-  ymax<-ext(template.r)[4]
-  ymin<-ext(template.r)[3]
-  xstart<-seq(xmin,xmax,75000)
-  xend<-c(xstart[2:length(xstart)]+overlap,as.numeric(xmax))
-  ystart<-seq(ymin,ymax,75000);
-  yend<-c(ystart[2:length(ystart)]+overlap,as.numeric(ymax))
+#' r<-terra::rast(extent=c(246700, 276700, 35500, 65400),res=c(50,50),vals=c(0))
+#' testtiles<-create_overlapping_tiles(r,overlap=1000,sz=10000)
+#' terra::plot(r)
+#' for(t in testtiles$tile_extents) terra::plot(terra::vect(terra::ext(t)),add=TRUE)
+create_overlapping_tiles<-function(template.r,overlap=1000,sz=10000){
+  xmax<-terra::ext(template.r)[2]
+  xmin<-terra::ext(template.r)[1]
+  if(sz%%terra::res(template.r)[1]!=0) warning("Choice of tile size is NOT divisible by resolution of template.r!!")
+
+  xtiles<-(xmax-xmin)%/%sz
+  xstart<-seq(xmin,xmin+(sz*xtiles-1),sz-overlap)
+  xend<-(xstart+sz)
+  xrem<-xmax-xend[length(xend)]
+  if(xrem< -(0.5*sz)){
+    xstart<-xstart[1:(length(xstart)-1)]
+    xend<-xend[1:(length(xend)-1)]
+    xend[length(xend)]<-xmax
+  }
+  if(xrem<=0.5*sz & xrem>-(0.5*sz)){
+    xend[length(xend)]<-xmax
+  }
+  if(xrem>0.5*sz){
+    xstart<-c(xstart,xend[length(xend)]-overlap)
+    xend<-c(xend,xmax)
+  }
+
+  ymax<-terra::ext(template.r)[4]
+  ymin<-terra::ext(template.r)[3]
+  ytiles<-(ymax-ymin)%/%sz
+  ystart<-seq(ymin,ymin+(sz*ytiles-1),sz-overlap)
+  yend<-(ystart+sz)
+  yrem<-ymax-yend[length(yend)]
+  if(yrem< -(0.5*sz)){
+    ystart<-ystart[1:(length(ystart)-1)]
+    yend<-yend[1:(length(yend)-1)]
+    yend[length(yend)]<-ymax
+  }
+  if(yrem<=0.5*sz & yrem> -(0.5*sz)){
+    yend[length(yend)]<-ymax
+  }
+  if(yrem>(0.5*sz)){
+    ystart<-c(ystart,yend[length(yend)]-overlap)
+    yend<-c(yend,ymax)
+  }
 
   elist<-list()
   etype<-c()
   for(x in 1:length(xstart)){
     for(y in 1:length(ystart)){
-      e<-ext(xstart[x],xend[x],ystart[y],yend[y])
-      r<-crop(template.r,e)
+      e<-terra::ext(xstart[x],xend[x],ystart[y],yend[y])
+      r<-terra::crop(template.r,e)
       elist<-c(elist,e)
-      if(!all(is.na(values(r)))){
+      if(!all(is.na(terra::values(r)))){
         etype<-c(etype,'y')
       } else etype<-c(etype,'n')
     }
@@ -153,9 +188,9 @@ mosaicblend <- function(rlist) {
 #' Create SpatRaster object using a template
 #' @import terra
 .rast <- function(m,tem) {
-  r<-rast(m)
-  ext(r)<-ext(tem)
-  crs(r)<-crs(tem)
+  r<-terra::rast(m)
+  ext(r)<-terra::ext(tem)
+  crs(r)<-terra::crs(tem)
   r
 }
 
@@ -170,9 +205,9 @@ mosaicblend <- function(rlist) {
 #'
 #' @noRd
 merge_all_tiles<-function(dir_in,scenario_name,year_range,template_file){
-  gb1km<-rast(template_file)
-  gb<-trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))
-  gb1km<-extend(gb1km,gb)
+  gb1km<-terra::rast(template_file)
+  gb<-terra::trim(aggregate(gb1km,25,fun="mean",na.rm=TRUE))
+  gb1km<-terra::extend(gb1km,gb)
   # Create overlapping tileset and record which are sea only which with land
   tileset<-create_overlapping_tiles(gb1km,overlap=5000,sz=75000)
   landtiles<-which(tileset$tile_land=="y")
@@ -187,15 +222,57 @@ merge_all_tiles<-function(dir_in,scenario_name,year_range,template_file){
     print(length(missing_tiles))
     stop("Missing input tile files!!!")
   }
-  rlist<-sprc(tile_filelist)
-  ukresults.r<-merge(rlist)
+  rlist<-terra::sprc(tile_filelist)
+  ukresults.r<-terra::merge(rlist)
   return(ukresults.r)
 }
 
 
-#' Wrapper to blend all land tile files in dir and add allsea tiles
+#' Title
 #'
-#' @param dir_in
+#' @param input_list - list of spatraster tiles - assume same number and order of layers in all
+#' @param blend_layers - vector of layer numbers to blend - others calculated via mosaic
+#' @param rows_in_col - integer = number of tiles (rows) in every tile column
+#'
+#' @return
+#' @export
+#'
+#' @examples
+blend_tile_lists<-function(input_list,blend_layers,rows_in_col=17){
+  output_r<-rast()
+  numlyrs<-nlyr(input_list[[1]])
+  startseq<-seq(1,length(input_list),rows_in_col)
+  endseq<-startseq+(rows_in_col-1)
+
+  # For each layer
+  for(n in 1:numlyrs){
+    lyr_list<-lapply(input_list,'[[',n)
+
+    if(n %in% blend_layers){
+      # Blend rows
+      col_list<-list()
+      for(c in 1:length(startseq)){
+        s<-startseq[c]; e<-endseq[c]
+        blend.r<-mosaicblend(rlist=lyr_list[s:e])
+        col_list<-c(col_list,blend.r)
+      }
+      # Blend cols
+      output_r<-c(output_r,mosaicblend(col_list))
+    }
+
+    if(!n %in% blend_layers){ # use simple merge
+      r<-do.call(merge,lyr_list)
+      output_r<-c(output_r,r)
+    }
+  }
+  return(output_r)
+}
+
+
+
+#' Wrapper to blend all tiles FROM FILES and add any only sea tiles
+#'
+#' @param dir_in - must contain files of all land tiles
 #' @param template_file
 #' @param scenario_name
 #' @param year_range

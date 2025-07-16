@@ -11,8 +11,8 @@
 #' @export
 #'
 #' @examples
-#' mon=c(5,6)
-#' microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
+#' #mon=c(5,6)
+#' #microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
 splinmicroclimatevars<-function(mout,climdata,mon,lat,lon,timestep) {
   tme <- as.POSIXlt(climdata$obs_time,tz="UTC")
   s<-which((tme$mon+1) %in% mon)
@@ -151,8 +151,8 @@ burnin<-function(microclim, reps = 5, treeradius, refl = 0.23, em = 0.97, surfwe
 #' @export
 #'
 #' @examples
-#' ii <- which.max(microclim$Rdirdown)
-#' treetemps<-runmodel(microclim, ii, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8, timestep = 60)
+#' #ii <- which.max(microclim$Rdirdown)
+#' #treetemps<-runmodel(microclim, ii, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8, timestep = 60)
 runmodel<-function(microclim, n, treeradius, refl = 0.23, em = 0.97, surfwet = 1,
                  kwood, cwood, rhowood, nseg = 16, nlyr = 8,
                  timestep = 60)  {
@@ -185,11 +185,11 @@ runmodel<-function(microclim, n, treeradius, refl = 0.23, em = 0.97, surfwet = 1
 #' @export
 #'
 #' @examples
-#' Outputs south-facing, outer layer trunk temperatures
-#' tts<-runmodeltime(microclim, 9, 1, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8)
-#' plot(tts,type="l",ylim=c(5,20),col="red")
-#' par(new=T)
-#' plot(microclim$tair,type="l",ylim=c(5,20),col="gray")
+#' # Outputs south-facing, outer layer trunk temperatures
+#' #tts<-runmodeltime(microclim, 9, 1, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8)
+#' #plot(tts,type="l",ylim=c(5,20),col="red")
+#' #par(new=T)
+#' #plot(microclim$tair,type="l",ylim=c(5,20),col="gray")
 runmodeltime <- function(microclim, seg, lyr, treeradius, refl = 0.23, em = 0.97, surfwet = 1,
                  kwood, cwood, rhowood, nseg = 16, nlyr = 8) {
   timestep<-round((microclim$hour[2]-microclim$hour[1])*3600,0)

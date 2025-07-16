@@ -11,8 +11,8 @@
 #' @export
 #'
 #' @examples
-#' mon=c(5,6)
-#' microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
+#' #mon=c(5,6)
+#' #microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
 preparevars<-function(mout,climdata,lat,lon,mon=NA,timestep=NA) {
   tme <- as.POSIXlt(climdata$obs_time,tz="UTC")
 
