@@ -2,9 +2,9 @@
 % Please edit documentation in R/treetrunkcode.R
 \name{initializevars}
 \alias{initializevars}
-\title{Calculates physical and thermal parameters of tree trunk}
+\title{Calculates physical and thermal parameters of each segment and layer of tree trunk}
 \usage{
-initializevars(microclim, ii, treeradius, cwood, rhowood, nseg, nlyr)
+initializevars(microclim, ii, treeradius, cwood, rhowood, nseg = 16, nlyr = 8)
 }
 \arguments{
 \item{microclim}{- micropoint model outputs of beneath canopy conditions}
@@ -20,5 +20,5 @@ initializevars(microclim, ii, treeradius, cwood, rhowood, nseg, nlyr)
 \item{nlyr}{- integer number of model trunk layers}
 }
 \description{
-Calculates physical and thermal parameters of tree trunk
+Calculates physical and thermal parameters of each segment and layer of tree trunk
 }

@@ -2,7 +2,7 @@
 % Please edit documentation in R/treetrunkcode.R
 \name{splinmicroclimatevars}
 \alias{splinmicroclimatevars}
-\title{Spline interpolates microclimate input and filters by month  - REMOVE - USE preparevars}
+\title{Spline interpolates microclimate input and filters by month  - REPLACED BY preparevars}
 \usage{
 splinmicroclimatevars(mout, climdata, mon, lat, lon, timestep)
 }
@@ -23,9 +23,9 @@ splinmicroclimatevars(mout, climdata, mon, lat, lon, timestep)
 dataframe of splided variables for input into tree trunk model
 }
 \description{
-Spline interpolates microclimate input and filters by month  - REMOVE - USE preparevars
+Spline interpolates microclimate input and filters by month  - REPLACED BY preparevars
 }
 \examples{
-mon=c(5,6)
-microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
+#mon=c(5,6)
+#microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
 }

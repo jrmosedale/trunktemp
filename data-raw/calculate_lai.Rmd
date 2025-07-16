@@ -356,6 +356,7 @@ weibull cannot be fitted to some nsp
 library(drc)
 library(drcSeedGerm)
 
+lai_list<-list()
 lai_models<-list()
 for(t in unique(laiwide_df$treeid)){
   modeldata<-laiwide_df[which(laiwide_df$treeid==t),]
@@ -378,11 +379,14 @@ for(t in unique(laiwide_df$treeid)){
   }
   if(modeldata$spp[[1]]=='oak') model <- drm(lai~date, fct =  W2.4(), data=modeldata)
   
-  x_axis <- seq(60,270,10)
+  x_axis <- seq(60,270,1)
   plot(modeldata$date, modeldata$lai,main=t,ylim=c(0,5),xlab = "Day of Year")
   lines(x_axis, predict(model, data.frame(date=x_axis)), col='red') 
 
+  model$subset<-modeldata[,c("date","lai")]
   lai_models[[t]]<-model
+  lai_list<-c(lai_list,modeldata)
+  
 }
 
 saveRDS(lai_models,file.path(dir_lai,paste0(lai,'_lai_models.Rds')))

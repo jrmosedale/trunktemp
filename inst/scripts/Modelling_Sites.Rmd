@@ -14,8 +14,6 @@ Takes as examples the four field sites for which tree trunk and beneath canopy t
 ## Setup
 Function calls, libraries etc
 ```{r setup, include=FALSE}
-prj <- system.file("proj", package = "terra")[1]
-Sys.setenv("PROJ_LIB" = prj)
 library(devtools)
 #  install_github("ilyamaclean/microtreetrunk")
 # unlink('mesoclim')
@@ -75,14 +73,13 @@ dir_ttrunk<-"dataout/treetrunk"
 grid_file<-file.path(dir_od,'Data','OSgrids','os_bng_grids.gpkg')
 sppparam_file<-file.path(dir_field,"spp_parameters.csv")
 
-
-
 hgt_up_trunk<-1 # in metres
 
-source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/load_field_data.R")
-source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/wood_functions.R")
-source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/modelling_functions.R")
-source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/emulatorcode.R")
+# If using outside package:
+#source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/load_field_data.R")
+#source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/wood_functions.R")
+#source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp/R/modelling_functions.R")
+#source("/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter/Rprojects/treetemp_cver/emulatorcode.R")
 
 # Get species defulat parameters
 spp_params<-read.csv(sppparam_file)
@@ -394,6 +391,31 @@ startdate<-as.POSIXct("2024-02-12 00:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_
 enddate<-  as.POSIXct("2024-10-10 23:00:00", "%Y-%m-%d %H:%M:%OS",tz=tz(loggers_df$datetime))
 loggers_df<-loggers_df[which(loggers_df$datetime>=startdate & loggers_df$datetime<=enddate),]
 ```
+
+### Correct loggers LAI estimate 
+Restrict estimated PAI by min observed values for NSP
+```{r correct_lai}
+for(t in names(lai_models)){
+  model<-lai_models[[t]]
+  sel<-which(loggers_df$id==t)
+  # Get day of year from result datetime
+  minlai<-min(model$subset$lai)
+  maxlai<-max(model$subset$lai)
+  doy<-lubridate::yday(loggers_df$datetime[sel])
+  pred_lai<-predict(model, data.frame(date=doy))
+  if(substr(t,4,6)=="nsp") pred_lai<-ifelse(pred_lai<minlai,minlai,pred_lai)
+  loggers_df$lai[sel]<-round(pred_lai,2)
+}
+
+# Plot to check
+for(id in unique(loggers_df$id)){
+  sel<-which(loggers_df$id==id)
+  plot(loggers_df$lai[sel]~lubridate::yday(loggers_df$datetime[sel]),main=id,ylim=c(0,4.2),xlim=c(80,280))
+}
+
+```
+
+
 
 ### Example of Wakehurst missing data
 ```{r missing_logger_data}

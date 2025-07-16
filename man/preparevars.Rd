@@ -28,6 +28,6 @@ Prepares microclimate and climate data for treetrunk model with option to interp
 REPLACES splinemicroclimate vars AND .sortdata functions
 }
 \examples{
-mon=c(5,6)
-microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
+#mon=c(5,6)
+#microclim<-splinmicroclimatevars(microptout, climdata, mon = mon, lat = 49.96807, lon = -5.215668, timestep = 60)
 }

@@ -2,7 +2,7 @@
 % Please edit documentation in R/emulatorcode.R
 \name{runmodelgrid}
 \alias{runmodelgrid}
-\title{Run treetrunk model at 25km resolution using era5 raster data previously reprojected to crs 27700}
+\title{Run treetrunk model across a 25km resolution grid using era5 raster data previously reprojected to crs 27700}
 \usage{
 runmodelgrid(
   era5data,
@@ -36,5 +36,5 @@ k = heat conductivity for each layer, surfwetness (0:1)}
 \item{rte}{}
 }
 \description{
-Run treetrunk model at 25km resolution using era5 raster data previously reprojected to crs 27700
+Run treetrunk model across a 25km resolution grid using era5 raster data previously reprojected to crs 27700
 }

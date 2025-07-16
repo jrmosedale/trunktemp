@@ -2,7 +2,8 @@
 % Please edit documentation in R/treetrunkcode.R
 \name{burnin}
 \alias{burnin}
-\title{Prepares trunk model}
+\title{Prepares tree trunk model
+Calls burnincpp}
 \usage{
 burnin(
   microclim,
@@ -43,5 +44,6 @@ burnin(
 \item{timestep}{- model timestep in seconds}
 }
 \description{
-Prepares trunk model
+Prepares tree trunk model
+Calls burnincpp
 }

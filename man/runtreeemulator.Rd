@@ -2,7 +2,8 @@
 % Please edit documentation in R/emulatorcode.R
 \name{runtreeemulator}
 \alias{runtreeemulator}
-\title{Title}
+\title{Run tree emulator
+ QUESTION - how do inputs related to splineing - CORRECTED seg number}
 \usage{
 runtreeemulator(treeclimdata, depth, aspect, treeparams)
 }
@@ -20,5 +21,6 @@ runtreeemulator(treeclimdata, depth, aspect, treeparams)
 \item{long}{}
 }
 \description{
-Title
+Run tree emulator
+ QUESTION - how do inputs related to splineing - CORRECTED seg number
 }

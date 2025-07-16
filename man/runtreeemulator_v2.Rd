@@ -2,25 +2,24 @@
 % Please edit documentation in R/emulatorcode.R
 \name{runtreeemulator_v2}
 \alias{runtreeemulator_v2}
-\title{Title Run treetrunk emulator with pre-defined layer widths}
+\title{Run treetrunk emulator with pre-defined layer widths
+is called after preparevars function}
 \usage{
 runtreeemulator_v2(treeclimdata, depth, aspect, treeparams)
 }
 \arguments{
+\item{treeclimdata}{- prepared microclimate/weather data output by `preparevars` function}
+
 \item{depth}{- from trunk surface of location to model (metres)}
 
 \item{aspect}{- of trunk location to model in degrees (north = 1, south = 180)}
 
-\item{treeparams}{- named list of tradius=tree radius, cs=specific heat capacity of each layer, and rho = density of each layer}
-
-\item{microclim}{- prepared microclimate/weather data output by `preparevars` function}
-
-\item{climdata}{- REMOVED!!! Use preparevars prior}
-
-\item{widths}{- vector of 8 layer widths}
+\item{treeparams}{- named list of tradius=tree radius in metres, cs=specific heat capacity of each layer,
+rho = density of each layer, layer_widths = width in metres of each layer}
 
 \item{long}{}
 }
 \description{
-Title Run treetrunk emulator with pre-defined layer widths
+Run treetrunk emulator with pre-defined layer widths
+is called after preparevars function
 }

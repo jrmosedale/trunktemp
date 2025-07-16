@@ -2,7 +2,8 @@
 % Please edit documentation in R/treetrunkcode.R
 \name{runmodeltime}
 \alias{runmodeltime}
-\title{Runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment}
+\title{Wrapper function that runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment
+Calls `initializevars`, `burnin` functions and the C++ function `runmodelthroughtime`.}
 \usage{
 runmodeltime(
   microclim,
@@ -48,12 +49,13 @@ runmodeltime(
 array of trunk temperatures (degree C) corresponding to location defined by `seg` and `lyr` for entire time period defined by microclim inputs
 }
 \description{
-Runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment
+Wrapper function that runs tree trunk model to return a timeseries of trunk temperatures for a given layer and segment
+Calls `initializevars`, `burnin` functions and the C++ function `runmodelthroughtime`.
 }
 \examples{
-Outputs south-facing, outer layer trunk temperatures
-tts<-runmodeltime(microclim, 9, 1, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8)
-plot(tts,type="l",ylim=c(5,20),col="red")
-par(new=T)
-plot(microclim$tair,type="l",ylim=c(5,20),col="gray")
+# Outputs south-facing, outer layer trunk temperatures
+#tts<-runmodeltime(microclim, 9, 1, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8)
+#plot(tts,type="l",ylim=c(5,20),col="red")
+#par(new=T)
+#plot(microclim$tair,type="l",ylim=c(5,20),col="gray")
 }

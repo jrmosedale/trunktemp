@@ -2,7 +2,8 @@
 % Please edit documentation in R/treetrunkcode.R
 \name{runmodel}
 \alias{runmodel}
-\title{Runs tree trunk model and returns temperatures at time interval n for all trunk segments and layers}
+\title{Runs tree trunk model and returns temperatures at time interval n for all trunk segments and layers
+Calls `initializevars`, `burnin` functions. and the C++ function `runmodelcpp`}
 \usage{
 runmodel(
   microclim,
@@ -49,8 +50,9 @@ runmodel(
 }
 \description{
 Runs tree trunk model and returns temperatures at time interval n for all trunk segments and layers
+Calls `initializevars`, `burnin` functions. and the C++ function `runmodelcpp`
 }
 \examples{
-ii <- which.max(microclim$Rdirdown)
-treetemps<-runmodel(microclim, ii, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8, timestep = 60)
+#ii <- which.max(microclim$Rdirdown)
+#treetemps<-runmodel(microclim, ii, treeradius = 0.75, refl = 0.23, em = 0.97, surfwet = 1, kwood = rep(0.42,8), cwood = rep(3000,8), rhowood = rep(900,8), nseg = 16, nlyr = 8, timestep = 60)
 }

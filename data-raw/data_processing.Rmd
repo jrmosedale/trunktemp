@@ -42,7 +42,7 @@ dir_tinytag<-file.path(dir_root,"Tiny Tag Data","tt_last_csv")
 dir_surveytag<-file.path(dir_root,"Survey Tag Data")
 
 dir_od<-"C:/Users/jm622/OneDrive - University of Exeter"
-#dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
+# dir_od<-"/Users/jonathanmosedale/Library/CloudStorage/OneDrive-UniversityofExeter"
 
 dir_lai<-file.path(dir_od,"MetOff_data","field_data","LAI_results")
 
@@ -109,10 +109,11 @@ See Get_2024_weather.Rmd for preprocessing of 2024 Haduk data.
 During the main monitoring period (Feb to Oct), temperature were not lower than -3C and no higher than 33C.
 
 ```{r,2024_weather}
+sites_27700<-project(vect(sites_sf),"epsg:27700")
 temp<-rast(file.path(dir_od,"MetOff_data","weather2024","temp_hrly_2024.tif"))
 plot(temp[[1]]); plot(sites_27700,add=T,col='red')
 tme<-time(temp)
-t2m<-t(extract(temp,vect(sites_27700),method="simple",ID=TRUE))
+t2m<-t(extract(temp,sites_27700,method="simple",ID=TRUE))
 
 t2m_df<-as.data.frame(t2m[2:dim(t2m)[1],],rownames=NULL)
 names(t2m_df)<-tolower(sites_sf$site)
